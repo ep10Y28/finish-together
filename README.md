@@ -35,6 +35,7 @@ Open **http://localhost:8000**. You start signed in as Rae Simmons, captain of L
 - **Port busy?** `python3 run.py --port 8001`
 - **Start over:** `python3 run.py --reset` (or **Reset** in the Agents panel for tonight's run only)
 - **Self-check:** `python3 scripts/smoke_test.py` should print `OK`.
+- **Token counts for the report:** after *Play the evening*, `python3 scripts/token_report.py` prints tokens and cost per agent.
 - **On your phone:** `python3 run.py --host 0.0.0.0`, then open the address it prints on a phone on the same Wi-Fi. On iPhone use Share → *Add to Home Screen*; on Android, Chrome's menu → *Add to Home screen*. It opens full screen like an app.
 - **The map** needs an internet connection (map tiles and street routing are free OpenStreetMap services). Without one, everything else still works and routes are sketched as dashed lines.
 
