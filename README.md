@@ -31,7 +31,7 @@ python3 run.py
 
 Open **http://localhost:8000**. You start signed in as Rae Simmons, captain of Last Lap Run Club in Philadelphia. Open the **Agents** panel and press **Play the evening** to watch a scripted night: runners check in at different paces, someone brings a friend, someone tries a prompt-injection attack, someone drops out, and the agents re-plan each time. Then press **▶ Watch the run** on the map.
 
-- **No key?** The app still runs in **demo mode**: the agents fall back to plain rules, and the badge at the top says so.
+- **No key?** The app still runs in **demo mode**: the agents fall back to plain rules, and the badge at the top says *No AI key · rules only*. In demo mode the Concierge only follows simple check-ins like "in, 5 miles at 9:30, bringing a friend"; with the key it reads any phrasing, remembers the conversation and asks when it isn't sure.
 - **Port busy?** `python3 run.py --port 8001`
 - **Start over:** `python3 run.py --reset` (or **Reset** in the Agents panel for tonight's run only)
 - **Self-check:** `python3 scripts/smoke_test.py` should print `OK`.
@@ -63,7 +63,7 @@ On a phone, tabs: **Tonight** (finish time, map, groups), **Chat**, **Agents**, 
 
 | Agent | Job | Tools |
 |---|---|---|
-| **Concierge** | Reads one runner's chat message and turns it into a check-in (status, today's pace, miles, guests); answers "who's going?" | `check_in`, `who_is_coming` (public fields only) |
+| **Concierge** | Understands what a runner means in chat, the way a clubmate would ("would love to do a 9:30 pace tonight, bringing a friend", "actually make it 6", "can my roommate come?"), updates their check-in, answers questions, and asks a short question when it can't tell | `check_in`, `who_is_coming` (public fields only) |
 | **Group Planner** | Sorts the runners who are in into pace groups by the pace they picked today. No one runs alone. | `make_groups(max_spread)` |
 | **Route Builder** | Gives each group a distance so every group reaches the finish at the target time, and checks the result. For a point-to-point run, no group may run less than the walk from start to finish. | `build_routes`, `set_group_miles`, `verify_plan` |
 | **Run Director** (orchestrator) | Decides whether a change needs a new plan, asks the other two, settles conflicts, posts the plan and nudges maybes. | `ask_group_planner`, `ask_route_builder`, `post_plan`, `nudge_maybe_runners`, `skip_replan` |

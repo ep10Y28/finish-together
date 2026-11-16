@@ -70,7 +70,10 @@ p { margin: 0 0 10px; }
   display: flex; align-items: center; gap: 7px; min-height: 44px; padding: 4px 10px 4px 4px;
   border: 1px solid var(--line); border-radius: 999px; background: var(--panel); cursor: pointer;
 }
-@media (max-width: 420px) { #mode { display: none; } .brand span { font-size: 15px; } }
+.badge.demo { background: color-mix(in srgb, var(--maybe) 18%, transparent); color: #8a6400; border-color: transparent; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .badge.demo { color: var(--maybe); } }
+@media (max-width: 480px) { .brand span { display: none; } .badge { font-size: 11px; padding: 4px 7px; } }
+.demo-note { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--maybe) 14%, transparent); color: var(--ink); }
 
 /* ---------- shared bits ---------- */
 .avatar {

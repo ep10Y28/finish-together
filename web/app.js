@@ -48,6 +48,15 @@ function toast(msg) {
   toastTimer = setTimeout(() => (t.hidden = true), 3200);
 }
 
+// ---------------------------------------------------------------- AI or rules badge
+function setModeBadge(mode, model) {
+  const b = $("mode");
+  const live = mode !== "demo";
+  b.textContent = live ? `AI on · ${model}` : "No AI key · rules only";
+  b.title = live ? "The agents are using the AI model." : "No course key found, so the agents use simple rules. Add PORTKEY_API_KEY to .env and restart for real understanding.";
+  b.className = "badge" + (live ? " live" : " demo");
+}
+
 // ---------------------------------------------------------------- API
 let ME = null;
 let PEOPLE = [];
@@ -360,9 +369,11 @@ function clubPage(slug, tab) {
       try { await api(`/api/clubs/${slug}/chat`, { method: "POST", body: { text } }); poll(); } catch (err) { toast(err.message); }
     } }, chatInput, h("button", { class: "btn", type: "submit" }, "Send")));
   const chatLocked = h("div", { class: "locked", hidden: true });
+  const demoNote = h("div", { class: "demo-note small", hidden: true },
+    "No AI key: the Concierge only follows simple check-ins like “in, 5 miles at 9:30, bringing a friend”. Add the course key to .env and restart so it understands any phrasing.");
   const pChat = h("section", { class: "panel p-chat" },
     h("div", { class: "panel-head" }, h("h2", {}, "Chat and check-ins"), h("span", { class: "muted small" }, "members only")),
-    messages, chatLocked, composer);
+    messages, chatLocked, demoNote, composer);
 
   // Agents panel
   const tok = { total: h("span", {}, "0"), cost: h("span", {}, "$0.0000") };
@@ -721,8 +732,8 @@ function clubPage(slug, tab) {
     if (!alive) return;
     latest = s;
     const live = s.mode !== "demo";
-    $("mode").textContent = live ? `Live · ${s.model}` : "Demo mode";
-    $("mode").className = "badge" + (live ? " live" : "");
+    setModeBadge(s.mode, s.model);
+    demoNote.hidden = live || !s.member;
     chatLocked.hidden = s.member;
     composer.hidden = !s.member;
     agentsLocked.hidden = s.member;
@@ -758,8 +769,7 @@ function clubPage(slug, tab) {
   try {
     const r = await api("/api/people");
     PEOPLE = r.people;
-    $("mode").textContent = r.mode === "demo" ? "Demo mode" : `Live · ${r.model}`;
-    $("mode").className = "badge" + (r.mode === "demo" ? "" : " live");
+    setModeBadge(r.mode, r.model);
     const saved = Number(store.get("ft_user")) || 25;      // demo default: Rae, captain of Last Lap Run Club
     setMe(PEOPLE.find((p) => p.id === saved) || PEOPLE.find((p) => p.id === 25) || null);
   } catch (e) { toast("Can't reach the app server. Is python3 run.py running?"); }
