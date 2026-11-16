@@ -47,7 +47,7 @@ PRICE_INPUT_PER_M = 1.25
 PRICE_OUTPUT_PER_M = 10.00
 
 # Safety and spending limits
-RUN_TOKEN_BUDGET = 60_000       # all agents combined, per run (one evening)
+RUN_TOKEN_BUDGET = 150_000      # all agents combined, per run (one evening); the scripted demo evening uses about 60,000
 MAX_REPLANS_PER_RUN = 12        # the Run Director stops re-planning after this
 MAX_TOOL_STEPS = 8              # per agent call, stops loops
 CHAT_LIMIT_PER_MINUTE = 6       # per runner
