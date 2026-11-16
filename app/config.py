@@ -1,0 +1,59 @@
+"""Settings for Finish Together.
+
+Only two secrets are ever read from the environment, as the course requires:
+PORTKEY_API_KEY (course key, model gpt-6-luna) or OPENAI_API_KEY (your own key).
+Everything else lives here so the grader never has to set anything else.
+"""
+from pathlib import Path
+import os
+
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parent.parent          # the repo folder
+DATA_DIR = ROOT / "data"
+WEB_DIR = ROOT / "web"
+DB_PATH = ROOT / "finish_together.db"
+
+# The course rule: look for .env in the repo folder first, then one level up.
+for candidate in (ROOT / ".env", ROOT.parent / ".env"):
+    if candidate.exists():
+        load_dotenv(candidate, override=False)
+        ENV_FILE = str(candidate)
+        break
+else:
+    ENV_FILE = None
+
+PORTKEY_API_KEY = os.getenv("PORTKEY_API_KEY", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+
+# Course setup: Portkey's OpenAI-compatible endpoint, key only in the
+# x-portkey-api-key header (no Authorization header).
+PORTKEY_URL = "https://api.portkey.ai/v1/chat/completions"
+PORTKEY_MODEL = "gpt-6-luna"
+
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL = "gpt-6-luna"
+
+if PORTKEY_API_KEY:
+    MODE = "portkey"
+elif OPENAI_API_KEY:
+    MODE = "openai"
+else:
+    MODE = "demo"   # no key: agents fall back to rule-based logic so the app still runs
+
+# Prices in US dollars per 1M tokens. Used for the cost meter and the report.
+# Confirm these against the course's posted gpt-6-luna prices before quoting them.
+PRICE_INPUT_PER_M = 1.25
+PRICE_OUTPUT_PER_M = 10.00
+
+# Safety and spending limits
+RUN_TOKEN_BUDGET = 60_000       # all agents combined, per run (one evening)
+MAX_REPLANS_PER_RUN = 12        # the Captain stops re-planning after this
+MAX_TOOL_STEPS = 8              # per agent call, stops loops
+CHAT_LIMIT_PER_MINUTE = 6       # per runner
+MAX_MESSAGE_CHARS = 400
+
+# Planning rules
+MAX_PACE_SPREAD = 0.9           # minutes per mile inside one pace group
+MIN_GROUP_SIZE = 2              # no one runs alone
+RUN_START = "18:30"

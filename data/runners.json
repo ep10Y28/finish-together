@@ -1,0 +1,218 @@
+[
+ {
+  "id": 1,
+  "name": "Maya Ortiz",
+  "pace": 8.4,
+  "usual_miles": 4,
+  "color": "#e4572e",
+  "phone": "215-555-0110",
+  "bio": "New to the club"
+ },
+ {
+  "id": 2,
+  "name": "Jordan Lee",
+  "pace": 10.9,
+  "usual_miles": 6,
+  "color": "#17bebb",
+  "phone": "215-555-0111",
+  "bio": "New to the club"
+ },
+ {
+  "id": 3,
+  "name": "Priya Nair",
+  "pace": 12.2,
+  "usual_miles": 4,
+  "color": "#ffc914",
+  "phone": "215-555-0112",
+  "bio": "New to the club"
+ },
+ {
+  "id": 4,
+  "name": "Sam Brooks",
+  "pace": 10.2,
+  "usual_miles": 4,
+  "color": "#2e282a",
+  "phone": "215-555-0113",
+  "bio": "Runs with a stroller sometimes"
+ },
+ {
+  "id": 5,
+  "name": "Dev Patel",
+  "pace": 8.7,
+  "usual_miles": 6,
+  "color": "#76b041",
+  "phone": "215-555-0114",
+  "bio": "Here for the beer after"
+ },
+ {
+  "id": 6,
+  "name": "Alicia Gomez",
+  "pace": 10.0,
+  "usual_miles": 3,
+  "color": "#7d5ba6",
+  "phone": "215-555-0115",
+  "bio": "Runs with a stroller sometimes"
+ },
+ {
+  "id": 7,
+  "name": "Theo Grant",
+  "pace": 12.5,
+  "usual_miles": 4,
+  "color": "#f28f3b",
+  "phone": "215-555-0116",
+  "bio": "Training for a spring half"
+ },
+ {
+  "id": 8,
+  "name": "Nina Volkov",
+  "pace": 11.8,
+  "usual_miles": 4,
+  "color": "#3a86ff",
+  "phone": "215-555-0117",
+  "bio": "Back from injury, easing in"
+ },
+ {
+  "id": 9,
+  "name": "Marcus Bell",
+  "pace": 8.5,
+  "usual_miles": 3,
+  "color": "#e4572e",
+  "phone": "215-555-0118",
+  "bio": "Training for a spring half"
+ },
+ {
+  "id": 10,
+  "name": "Hana Kim",
+  "pace": 11.2,
+  "usual_miles": 3,
+  "color": "#17bebb",
+  "phone": "215-555-0119",
+  "bio": "Marathoner in recovery mode"
+ },
+ {
+  "id": 11,
+  "name": "Luis Ramos",
+  "pace": 9.8,
+  "usual_miles": 7,
+  "color": "#ffc914",
+  "phone": "215-555-0120",
+  "bio": "Likes hills, oddly"
+ },
+ {
+  "id": 12,
+  "name": "Grace Okafor",
+  "pace": 10.4,
+  "usual_miles": 5,
+  "color": "#2e282a",
+  "phone": "215-555-0121",
+  "bio": "Social runner"
+ },
+ {
+  "id": 13,
+  "name": "Ben Carter",
+  "pace": 8.9,
+  "usual_miles": 7,
+  "color": "#76b041",
+  "phone": "215-555-0122",
+  "bio": "Back from injury, easing in"
+ },
+ {
+  "id": 14,
+  "name": "Zoe Chen",
+  "pace": 7.2,
+  "usual_miles": 5,
+  "color": "#7d5ba6",
+  "phone": "215-555-0123",
+  "bio": "Marathoner in recovery mode"
+ },
+ {
+  "id": 15,
+  "name": "Omar Haddad",
+  "pace": 9.0,
+  "usual_miles": 4,
+  "color": "#f28f3b",
+  "phone": "215-555-0124",
+  "bio": "Marathoner in recovery mode"
+ },
+ {
+  "id": 16,
+  "name": "Ivy Turner",
+  "pace": 9.4,
+  "usual_miles": 3,
+  "color": "#3a86ff",
+  "phone": "215-555-0125",
+  "bio": "Runs with a stroller sometimes"
+ },
+ {
+  "id": 17,
+  "name": "Caleb Wright",
+  "pace": 8.0,
+  "usual_miles": 7,
+  "color": "#e4572e",
+  "phone": "215-555-0126",
+  "bio": "Back from injury, easing in"
+ },
+ {
+  "id": 18,
+  "name": "Rosa Delgado",
+  "pace": 10.6,
+  "usual_miles": 7,
+  "color": "#17bebb",
+  "phone": "215-555-0127",
+  "bio": "Runs with a stroller sometimes"
+ },
+ {
+  "id": 19,
+  "name": "Kenji Mori",
+  "pace": 7.8,
+  "usual_miles": 3,
+  "color": "#ffc914",
+  "phone": "215-555-0128",
+  "bio": "Training for a spring half"
+ },
+ {
+  "id": 20,
+  "name": "Leah Fischer",
+  "pace": 7.5,
+  "usual_miles": 6,
+  "color": "#2e282a",
+  "phone": "215-555-0129",
+  "bio": "Here for the beer after"
+ },
+ {
+  "id": 21,
+  "name": "Andre Silva",
+  "pace": 11.5,
+  "usual_miles": 5,
+  "color": "#76b041",
+  "phone": "215-555-0130",
+  "bio": "Here for the beer after"
+ },
+ {
+  "id": 22,
+  "name": "Tess Murphy",
+  "pace": 9.5,
+  "usual_miles": 7,
+  "color": "#7d5ba6",
+  "phone": "215-555-0131",
+  "bio": "Likes hills, oddly"
+ },
+ {
+  "id": 23,
+  "name": "Felix Wagner",
+  "pace": 8.2,
+  "usual_miles": 3,
+  "color": "#f28f3b",
+  "phone": "215-555-0132",
+  "bio": "Training for a spring half"
+ },
+ {
+  "id": 24,
+  "name": "Simone Laurent",
+  "pace": 9.2,
+  "usual_miles": 5,
+  "color": "#3a86ff",
+  "phone": "215-555-0133",
+  "bio": "Back from injury, easing in"
+ }
+]

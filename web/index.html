@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Finish Together</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="30" height="30"><path d="M4 26h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M9 26V8l9 3-9 3" fill="currentColor"/><circle cx="22" cy="12" r="2.6" fill="currentColor"/><path d="M22 15l-2 6 3 5M21 18l4 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+      </div>
+      <div>
+        <h1>Finish Together</h1>
+        <p id="subtitle" class="muted">Tonight's group run</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span id="mode" class="badge">…</span>
+      <button id="simulate" class="btn ghost">Play the evening</button>
+      <button id="replan" class="btn ghost">Re-plan</button>
+      <button id="reset" class="btn ghost">Reset</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <div class="eyebrow">Everyone back at the bar by</div>
+      <div id="backAt" class="big">--:--</div>
+      <div id="heroSub" class="muted"></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><span id="statIn">0</span><label>going</label></div>
+      <div class="stat"><span id="statMaybe">0</span><label>maybe</label></div>
+      <div class="stat"><span id="statGroups">0</span><label>groups</label></div>
+      <div class="stat"><span id="statSpread">0</span><label>min apart</label></div>
+    </div>
+  </section>
+
+  <main class="grid">
+    <!-- Feed and chat -->
+    <section class="panel feed">
+      <div class="panel-head">
+        <h2>Tonight's feed</h2>
+        <span class="muted small">check-ins and chat</span>
+      </div>
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <div class="composer">
+        <div class="as">
+          <label for="who" class="small muted">You are</label>
+          <select id="who"></select>
+          <div class="quick">
+            <button class="chip in" data-status="in">I'm in</button>
+            <button class="chip maybe" data-status="maybe">Maybe</button>
+            <button class="chip out" data-status="out">Out</button>
+          </div>
+        </div>
+        <form id="chatForm">
+          <input id="chatInput" maxlength="400" autocomplete="off"
+                 placeholder="e.g. in for 5 at 9:30, bringing a friend">
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Plan -->
+    <section class="panel plan">
+      <div class="panel-head">
+        <h2>The plan</h2>
+        <span id="planMeta" class="muted small"></span>
+      </div>
+      <div id="race" class="race"></div>
+      <div id="groups" class="groups"></div>
+    </section>
+
+    <!-- Agents -->
+    <section class="panel agents">
+      <div class="panel-head">
+        <h2>Agents at work</h2>
+        <span class="muted small">live trace</span>
+      </div>
+      <div class="meter">
+        <div class="meter-row">
+          <div><span id="tokTotal">0</span><label>tokens</label></div>
+          <div><span id="tokCost">$0.0000</span><label>cost tonight</label></div>
+        </div>
+        <div class="bar"><div id="budgetFill"></div></div>
+        <div id="budgetLabel" class="small muted"></div>
+        <table id="byAgent" class="by-agent"></table>
+      </div>
+      <div id="events" class="events"></div>
+    </section>
+  </main>
+
+  <footer class="muted small">Demo data: runners and loop distances are made up. MGT 409 final project.</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>
