@@ -84,7 +84,7 @@ Model: `gpt-6-luna` through Portkey with the course key (header `x-portkey-api-k
 - **Leaks:** anything shaped like a phone number or email is scrubbed from agent replies.
 - **Who sees what:** the server checks membership on every request. Non-members see routes and group sizes, never names, chat or the agent trace. Only the club's captain can approve members or change the run.
 - **Location:** Finish Together never tracks anyone. *Watch the run* is a simulation drawn from the plan. The only places stored are the club's meeting point and finish, which the captain chooses.
-- **Bad math:** every plan is re-checked by `verify_plan`; a plan whose numbers don't add up, whose groups finish more than 6 minutes apart, or whose groups can't reach the finish is rejected and rebuilt. If the finish is too far for the slowest group in the time set, the target is stretched and the plan says why.
+- **Bad math:** every plan is re-checked by `verify_plan`; a plan whose numbers don't add up, whose groups finish more than 2 minutes apart (distances are rounded to a tenth of a mile, so they usually finish within a minute), or whose groups can't reach the finish is rejected and rebuilt. If the finish is too far for the slowest group in the time set, the target is stretched and the plan says why.
 - **Overspending:** a per-evening token budget, a cap on re-plans, a cap on tool steps per agent, and a per-runner chat rate limit. When the budget runs out, the agents finish with rules instead of model calls.
 - **Cheap by design:** the Run Director skips re-planning when nobody's in-or-out status, pace or the club's settings changed.
 

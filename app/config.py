@@ -65,8 +65,8 @@ MAX_CLUB_FIELD_CHARS = 80
 # Planning rules
 MAX_PACE_SPREAD = 0.9           # minutes per mile inside one pace group
 MIN_GROUP_SIZE = 2              # no one runs alone
-ROUTE_STEP_MILES = 0.25         # group distances are rounded to quarter miles
-MAX_FINISH_SPREAD = 6           # minutes; a plan whose groups come back further apart is rejected
+ROUTE_STEP_MILES = 0.1          # group distances are rounded to a tenth of a mile, so groups finish within about a minute
+MAX_FINISH_SPREAD = 2           # minutes; a plan whose groups come back further apart is rejected and fixed
 DEFAULT_TARGET_MINUTES = 45
 
 # App Admin and the Improvement Scout

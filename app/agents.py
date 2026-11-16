@@ -364,13 +364,13 @@ def route_builder(club_id, state, note=""):
               f"at {finish_name(club)} at the same time. {how} The club captain set "
               f"tonight's run to {describe_target(club)}. Call build_routes to give every group its distance. "
               "If a group's distance clearly doesn't suit it, you may adjust it with set_group_miles, as long as "
-              "the groups still finish within a few minutes of each other. Always finish with verify_plan and "
+              "the groups still finish within 2 minutes of each other. Always finish with verify_plan and "
               "fix anything it rejects. Never state distances or times yourself; the tools compute them. "
               "If the finish is away from the start, no group can run less than the distance to it; build_routes "
               "handles that. The map draws each group's route on real streets.")
     schemas = [
         tool("build_routes", "Give every group a distance that brings it back at the target time."),
-        tool("set_group_miles", "Hand-set one group's distance in miles (rounded to quarter miles). "
+        tool("set_group_miles", "Hand-set one group's distance in miles (rounded to a tenth of a mile). "
              "With staggered starts this sets the shared distance for every group.",
              {"group_id": {"type": "integer"}, "miles": {"type": "number"}}, ["group_id", "miles"]),
         tool("verify_plan", "Recheck every number and the finish-time spread."),
@@ -548,13 +548,16 @@ def live_director(club_id, state, reason):
         "runs: say in the announcement what they can do, like a short add-on or another group), then "
         "post_plan with a short, upbeat announcement of two or three sentences that names the return "
         "time, and finally nudge_maybe_runners. If nothing important changed, call skip_replan. "
-        "Never make up distances or times; use what the tools return."
+        "Never make up distances or times; use what the tools return. Notes to the Group Planner and Route "
+        "Builder say what changed and who needs what; never put distances, paces or times in them, because "
+        "the tools work those out."
     )
     user = json.dumps({"what_changed": reason, "check_ins": roster_summary(club_id),
                        "current_plan": compact(last) if last and last.get("groups") else None})
     schemas = [
         tool("ask_group_planner", "Have the Group Planner build pace groups.", {"note": {"type": "string"}}),
-        tool("ask_route_builder", "Have the Route Builder plan and verify distances.", {"note": {"type": "string"}}),
+        tool("ask_route_builder", "Have the Route Builder plan and verify distances. The note says what changed; "
+             "leave the distances to the Route Builder.", {"note": {"type": "string"}}),
         tool("post_plan", "Publish the plan with your announcement.",
              {"announcement": {"type": "string"}}, ["announcement"]),
         tool("nudge_maybe_runners", "Invite runners who said maybe to join a group at their pace."),
