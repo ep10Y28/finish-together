@@ -15,6 +15,8 @@ class BudgetExceeded(Exception):
 
 
 def spent_tokens(club_id):
+    if club_id is None:                      # the Improvement Scout has its own daily budget
+        return db.scout_tokens_today()
     t = db.token_totals(club_id)["total"]
     return int(t["tin"]) + int(t["tout"])
 
@@ -39,7 +41,7 @@ def cost_of(tin, tout):
     return tin / 1e6 * config.PRICE_INPUT_PER_M + tout / 1e6 * config.PRICE_OUTPUT_PER_M
 
 
-def run_agent(club_id, agent, system, user, tools, handlers):
+def run_agent(club_id, agent, system, user, tools, handlers, budget=None):
     """Run one agent until it answers without calling a tool.
 
     club_id: whose run this is (the token budget is per club, per evening).
@@ -48,8 +50,9 @@ def run_agent(club_id, agent, system, user, tools, handlers):
     """
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     for step in range(config.MAX_TOOL_STEPS):
-        if spent_tokens(club_id) >= config.RUN_TOKEN_BUDGET:
-            db.log_event(club_id, agent, "guard", f"Token budget of {config.RUN_TOKEN_BUDGET:,} reached; stopped.")
+        limit = budget or config.RUN_TOKEN_BUDGET
+        if spent_tokens(club_id) >= limit:
+            db.log_event(club_id, agent, "guard", f"Token budget of {limit:,} reached; stopped.")
             raise BudgetExceeded(agent)
         data = _request(messages, tools)
         usage = data.get("usage") or {}

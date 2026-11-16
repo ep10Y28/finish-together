@@ -73,6 +73,16 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// The page reports its own script errors so the Improvement Scout can turn them into fixes.
+let reportedErrors = 0;
+function reportError(message) {
+  if (reportedErrors++ > 5) return;
+  fetch("/api/client-error", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ page: location.hash || "#/", message: String(message).slice(0, 400) }) }).catch(() => {});
+}
+window.addEventListener("error", (e) => reportError(e.message || "script error"));
+window.addEventListener("unhandledrejection", (e) => reportError((e.reason && e.reason.message) || "unhandled promise rejection"));
+
 // ---------------------------------------------------------------- bottom sheet
 let sheetMap = null;
 function openSheet(title, body) {
@@ -99,7 +109,10 @@ function setMe(person) {
   const a = $("accountAvatar");
   a.textContent = person ? initials(person.name) : "?";
   a.style.background = person ? person.color : "#9a948b";
+  IS_ADMIN = false; $("adminLink").hidden = true;
+  if (person) api("/api/me").then((r) => { if (ME && ME.id === person.id) { IS_ADMIN = !!r.is_admin; $("adminLink").hidden = !IS_ADMIN; } }).catch(() => {});
 }
+let IS_ADMIN = false;
 
 function accountSheet() {
   const filter = h("input", { type: "search", placeholder: "Find a person", autocomplete: "off", "aria-label": "Find a person" });
@@ -143,6 +156,7 @@ function render() {
   if (stopClub) { stopClub(); stopClub = null; }
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (parts[0] === "club" && parts[1]) clubPage(parts[1], parts[2] || "plan");
+  else if (parts[0] === "admin") adminPage();
   else directory();
   window.scrollTo(0, 0);
 }
@@ -193,62 +207,134 @@ function clubCard(c) {
       h("span", {}, c.tonight.groups ? `${c.tonight.going} going · ${c.tonight.groups} groups · finish ${c.tonight.back_at}` : "No plan yet")));
 }
 
+// ---------------------------------------------------------------- place suggestions
+// Suggestions while typing come from Photon (komoot's free OpenStreetMap search, made for search-as-you-type,
+// no key). Near misses are tolerated: if the exact words find nothing, filler words like "steps" or
+// "entrance" are dropped and then one word at a time, so "Philadelphia Art Museum Steps" still finds
+// the Philadelphia Museum of Art. Results are biased toward the club's area.
+const FILLER = /\b(steps?|the|of|at|by|near|entrance|front|corner|park(ing)? lot|area)\b/gi;
+function queryVariants(q) {
+  const out = [q];
+  const lean = q.replace(FILLER, " ").replace(/\s+/g, " ").trim();
+  if (lean && lean !== q) out.push(lean);
+  const words = lean.split(" ");
+  if (words.length > 2) for (let i = words.length - 1; i >= 0 && out.length < 6; i--) out.push(words.filter((_, k) => k !== i).join(" "));
+  return [...new Set(out)];
+}
+async function suggestPlaces(q, near) {
+  const bias = near ? `&lat=${near[0].toFixed(4)}&lon=${near[1].toFixed(4)}` : "";
+  for (const v of queryVariants(q)) {
+    const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(v)}&limit=5&lang=en${bias}`);
+    if (!r.ok) throw new Error("search unavailable");
+    const j = await r.json();
+    const seen = new Set();
+    const places = (j.features || []).map((f) => {
+      const p = f.properties || {};
+      const name = p.name || [p.housenumber, p.street].filter(Boolean).join(" ") || p.city || "Place";
+      const where = [p.name ? p.street : null, p.city || p.county, p.state].filter(Boolean);
+      return { name, label: [name, ...where.filter((x) => x !== name)].join(", "),
+               at: [f.geometry.coordinates[1], f.geometry.coordinates[0]] };
+    }).filter((x) => !seen.has(x.label) && seen.add(x.label));
+    if (places.length) return { places, used: v };
+  }
+  return { places: [], used: q };
+}
+
+// A text field that names a place and suggests matches as you type. onPick({name, at}); onName(text).
+function placeField(label, value, near, onPick, onName) {
+  const input = h("input", { value: value || "", maxlength: 60, autocomplete: "off", placeholder: "Type a place, e.g. Philadelphia Museum of Art",
+                             "aria-label": label, role: "combobox", "aria-expanded": "false", "aria-autocomplete": "list" });
+  const list = h("ul", { class: "suggest", role: "listbox", hidden: true });
+  let timer = null, seq = 0, items = [], active = -1;
+  const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); active = -1; };
+  const pick = (pl) => { input.value = pl.name; close(); onPick(pl); };
+  const paint = (note) => {
+    list.replaceChildren(...items.map((pl, i) => h("li", { role: "option", class: i === active ? "on" : "", "aria-selected": i === active ? "true" : "false",
+      onmousedown: (e) => { e.preventDefault(); pick(pl); } }, h("b", {}, pl.name), h("span", { class: "small muted" }, pl.label.slice(pl.name.length + 2)))),
+      ...(note ? [h("li", { class: "note small muted" }, note)] : []));
+    list.hidden = !items.length && !note;
+    input.setAttribute("aria-expanded", list.hidden ? "false" : "true");
+  };
+  async function lookup() {
+    const q = input.value.trim(), my = ++seq;
+    if (q.length < 3) { items = []; close(); return; }
+    try {
+      const { places, used } = await suggestPlaces(q, near());
+      if (my !== seq) return;
+      items = places; active = places.length ? 0 : -1;
+      paint(places.length ? (used !== q ? `Showing matches for “${used}”` : "") : "No matches. Try other words, or drag the pin on the map.");
+    } catch { if (my === seq) { items = []; paint("Place search isn't reachable right now. Drag the pin on the map instead."); } }
+  }
+  input.addEventListener("input", () => { onName(input.value.trim()); clearTimeout(timer); timer = setTimeout(lookup, 300); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && items.length) { e.preventDefault(); active = (active + 1) % items.length; paint(); }
+    else if (e.key === "ArrowUp" && items.length) { e.preventDefault(); active = (active - 1 + items.length) % items.length; paint(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (!list.hidden && items[active]) pick(items[active]); else { clearTimeout(timer); lookup(); } }
+    else if (e.key === "Escape") close();
+  });
+  input.addEventListener("blur", () => setTimeout(close, 150));
+  return { node: h("label", { class: "place-field" }, label, h("div", { class: "suggest-wrap" }, input, list)), input };
+}
+
 // ---------------------------------------------------------------- map picker (start and finish)
 function mapPicker(initial, onChange) {
-  // initial: {start:[lat,lng], end:[lat,lng]|null}. onChange({start, end, routeType}).
-  const state = { start: initial.start, end: initial.end, mode: "start", routeType: initial.end ? "point" : "loop" };
+  // initial: {start:[lat,lng], end:[lat,lng]|null, startName, endName}. onChange({start, end, routeType, startName, endName}).
+  const state = { start: initial.start, end: initial.end, routeType: initial.end ? "point" : "loop",
+                  startName: initial.startName || "", endName: initial.endName || "" };
   const box = h("div", { class: "map picker-map" });
   const help = h("div", { class: "small muted" });
-  const which = h("div", { class: "seg" });
   const typeSeg = h("div", { class: "seg" });
-  const search = h("input", { type: "search", placeholder: "Search a place, e.g. Rittenhouse Square", "aria-label": "Search a place" });
   const markers = {};
   let map = null;
+  const near = () => state.start;
+  const emit = () => onChange({ start: state.start, end: state.routeType === "point" ? state.end : null, routeType: state.routeType,
+                                startName: state.startName, endName: state.endName });
+  const startField = placeField("Start (meeting point)", state.startName, near,
+    (pl) => { state.start = pl.at; state.startName = pl.name; if (map) map.setView(pl.at, 15); drawPins(); emit(); },
+    (name) => { state.startName = name; emit(); });
+  const endField = placeField("Finish", state.endName, near,
+    (pl) => { state.end = pl.at; state.endName = pl.name; if (map) map.setView(pl.at, 15); drawPins(); emit(); },
+    (name) => { state.endName = name; emit(); });
+  function pinAt(which) {
+    const kind = which === "end" ? "finish" : "start";
+    const icon = L.divIcon({ className: `pin pin-${kind}`, html: `<span>${kind === "finish" ? "🏁" : "●"}</span>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+    return L.marker(state[which], { icon, draggable: true, title: kind === "finish" ? "Finish: drag to move" : "Start: drag to move" })
+      .addTo(map).on("dragend", (e) => { const ll = e.target.getLatLng(); state[which] = [ll.lat, ll.lng]; emit(); });
+  }
+  function drawPins() {
+    if (!map) return;
+    for (const k of ["start", "end"]) { if (markers[k]) { map.removeLayer(markers[k]); markers[k] = null; } }
+    markers.start = pinAt("start");
+    if (state.routeType === "point" && state.end) markers.end = pinAt("end");
+  }
   const sync = () => {
-    which.replaceChildren(
-      h("button", { type: "button", class: state.mode === "start" ? "on" : "", onclick: () => { state.mode = "start"; sync(); } }, "Place start"),
-      state.routeType === "point" ? h("button", { type: "button", class: state.mode === "end" ? "on" : "", onclick: () => { state.mode = "end"; sync(); } }, "Place finish") : null);
     typeSeg.replaceChildren(
-      h("button", { type: "button", class: state.routeType === "loop" ? "on" : "", onclick: () => { state.routeType = "loop"; state.end = null; state.mode = "start"; sync(); } }, "Loop back to start"),
+      h("button", { type: "button", class: state.routeType === "loop" ? "on" : "", onclick: () => { state.routeType = "loop"; sync(); } }, "Loop back to start"),
       h("button", { type: "button", class: state.routeType === "point" ? "on" : "", onclick: () => {
         state.routeType = "point";
         if (!state.end) state.end = [state.start[0] + 0.01, state.start[1] + 0.012];
-        state.mode = "end"; sync();
+        sync();
+        if (map) map.fitBounds([state.start, state.end], { padding: [40, 40], maxZoom: 15 });
       } }, "Separate finish"));
-    help.textContent = `Tap anywhere on the map to put the ${state.mode === "start" ? "start" : "finish"} there, or search a place above.`;
-    if (map) {
-      for (const k of ["start", "end"]) { if (markers[k]) { map.removeLayer(markers[k]); markers[k] = null; } }
-      markers.start = FT_MAP.pin(map, state.start, "Start", "start");
-      if (state.routeType === "point" && state.end) markers.end = FT_MAP.pin(map, state.end, "Finish", "finish");
-    }
-    onChange({ start: state.start, end: state.routeType === "point" ? state.end : null, routeType: state.routeType });
+    endField.node.hidden = state.routeType !== "point";
+    help.textContent = state.routeType === "point"
+      ? "Pick each place from the suggestions, then drag the ● start or 🏁 finish pin to the exact spot. Tapping the map moves the nearer pin."
+      : "Pick the place from the suggestions, then drag the pin to the exact spot, or tap the map to move it.";
+    drawPins();
+    emit();
   };
-  const wrap = h("div", { class: "picker" }, h("div", { class: "label" }, "Route"), typeSeg, which,
-    h("div", { class: "search-row" }, search, h("button", { class: "btn", type: "button", onclick: () => findPlace() }, "Find")),
-    box, help);
-  search.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); findPlace(); } });
-  async function findPlace() {
-    const q = search.value.trim();
-    if (!q || !map) return;
-    try {
-      // OpenStreetMap's free place search: one request per search, as its usage policy asks.
-      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`);
-      const j = await r.json();
-      if (!j.length) { toast("No place found. Try other words, or tap the map."); return; }
-      const p = [+j[0].lat, +j[0].lon];
-      state[state.mode] = p;
-      map.setView(p, 15);
-      sync();
-      wrap.dispatchEvent(new CustomEvent("placename", { detail: { which: state.mode, name: (j[0].name || j[0].display_name || "").split(",")[0] } }));
-    } catch { toast("Place search isn't reachable right now. Tap the map instead."); }
-  }
+  const wrap = h("div", { class: "picker" }, h("div", { class: "label" }, "Route"), typeSeg, startField.node, endField.node, box, help);
   setTimeout(() => {
     map = FT_MAP.makeMap(box, state.start, 14);
     wrap._map = map;
     if (!map) return;
-    map.on("click", (e) => { state[state.mode] = [e.latlng.lat, e.latlng.lng]; sync(); });
+    map.on("click", (e) => {
+      const p = [e.latlng.lat, e.latlng.lng];
+      const which = state.routeType === "point" && state.end && FT_MAP.dist(p, state.end) < FT_MAP.dist(p, state.start) ? "end" : "start";
+      state[which] = p; drawPins(); emit();
+    });
     sync();
-    if (state.end) map.fitBounds([state.start, state.end], { padding: [40, 40], maxZoom: 15 });
+    if (state.routeType === "point" && state.end) map.fitBounds([state.start, state.end], { padding: [40, 40], maxZoom: 15 });
   }, 30);
   sync();
   return wrap;
@@ -281,26 +367,23 @@ function targetPicker(mode, value) {
 // ---------------------------------------------------------------- start a club
 function newClubSheet() {
   if (!ME) { accountSheet(); return; }
-  let pick = { start: [39.9526, -75.1652], end: null, routeType: "loop" };
+  let pick = { start: [39.9526, -75.1652], end: null, routeType: "loop", startName: "", endName: "" };
   const f = {
     name: h("input", { required: true, maxlength: 60, placeholder: "Club name" }),
     city: h("input", { required: true, maxlength: 60, placeholder: "City" }),
-    start_name: h("input", { required: true, maxlength: 60, placeholder: "Where you meet, e.g. City Hall" }),
-    end_name: h("input", { maxlength: 60, placeholder: "Where you finish" }),
     run_day: h("select", {}, DAYS.map((d) => h("option", { value: d, selected: d === "Wednesday" }, d))),
     run_time: h("input", { type: "time", value: "18:30", required: true }),
   };
-  const endLabel = h("label", { hidden: true }, "Finish name", f.end_name);
-  const picker = mapPicker(pick, (p) => { pick = p; endLabel.hidden = p.routeType !== "point"; });
-  picker.addEventListener("placename", (e) => { const t = e.detail.which === "end" ? f.end_name : f.start_name; if (!t.value) t.value = e.detail.name; });
+  const picker = mapPicker(pick, (p) => { pick = p; });
   const target = targetPicker("time", 45);
   const form = h("form", { class: "form", onsubmit: async (e) => {
     e.preventDefault();
     try {
-      const body = { name: f.name.value, city: f.city.value, start_name: f.start_name.value,
+      if (!pick.startName) { toast("Name the meeting point."); return; }
+      const body = { name: f.name.value, city: f.city.value, start_name: pick.startName,
         start_lat: pick.start[0], start_lng: pick.start[1], run_day: f.run_day.value, run_time: f.run_time.value,
         route_type: pick.routeType, ...target.value() };
-      if (pick.routeType === "point") Object.assign(body, { end_name: f.end_name.value || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
+      if (pick.routeType === "point") Object.assign(body, { end_name: pick.endName || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
       const r = await api("/api/clubs", { method: "POST", body });
       closeSheet();
       toast("Club created. You're its captain.");
@@ -308,13 +391,85 @@ function newClubSheet() {
     } catch (err) { toast(err.message); }
   } },
     h("label", {}, "Club name", f.name), h("label", {}, "City", f.city),
-    h("label", {}, "Meeting point name", f.start_name), endLabel,
     picker,
     h("div", { class: "row2" }, h("label", {}, "Day", f.run_day), h("label", {}, "Start time", f.run_time)),
     target.node,
     h("button", { class: "btn primary block", type: "submit" }, "Create club"));
   openSheet("Start a club", form);
   sheetMap = { remove() { if (picker._map) picker._map.remove(); } };
+}
+
+// ---------------------------------------------------------------- page: App Admin
+// The Improvement Scout proposes fixes from feedback, errors and the agent trace. It can't change the app:
+// the App Admin approves or denies each one here, and approved ones export as a to-do list for a developer.
+async function adminPage() {
+  const view = $("view");
+  const page = h("section", { class: "page admin" }, h("div", { class: "muted" }, "Loading…"));
+  view.replaceChildren(page);
+  if (!ME) { page.replaceChildren(h("div", { class: "empty" }, "Sign in as the App Admin (Rae Simmons in the demo).")); return; }
+  let filter = "pending", data;
+  async function load() {
+    try { data = await api("/api/admin"); } catch (e) { page.replaceChildren(h("div", { class: "empty" }, e.message, " ", h("a", { href: "#/" }, "Back to clubs"))); return; }
+    draw();
+  }
+  async function download(what, filename) {
+    const r = await fetch(`/api/admin/export?what=${what}`, { headers: { "X-User-Id": String(ME.id) } });
+    if (!r.ok) { toast("Couldn't export."); return; }
+    const url = URL.createObjectURL(await r.blob());
+    const a = h("a", { href: url, download: filename }); document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  async function decide(id, decision, note) {
+    try { data.proposals = (await api(`/api/admin/proposals/${id}`, { method: "POST", body: { decision, note } })).proposals; draw(); }
+    catch (e) { toast(e.message); }
+  }
+  function draw() {
+    const sc = data.scout;
+    const last = sc.last_run ? new Date(sc.last_run * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "not yet";
+    const runBtn = h("button", { class: "btn primary", onclick: async () => {
+      runBtn.disabled = true; runBtn.textContent = "Scouting…";
+      try { const r = await api("/api/admin/scout", { method: "POST" }); toast(r.added ? `${r.added} new proposal${r.added > 1 ? "s" : ""}.` : "Nothing new to propose."); await load(); }
+      catch (e) { toast(e.message); runBtn.disabled = false; runBtn.textContent = "Run the Scout now"; }
+    } }, "Run the Scout now");
+    const counts = { pending: 0, approved: 0, denied: 0 };
+    data.proposals.forEach((p) => counts[p.status]++);
+    const shown = data.proposals.filter((p) => filter === "all" || p.status === filter);
+    const seg = h("div", { class: "seg" }, ...[["pending", `To review (${counts.pending})`], ["approved", `Approved (${counts.approved})`], ["denied", `Denied (${counts.denied})`], ["all", "All"]]
+      .map(([v, l]) => h("button", { type: "button", class: filter === v ? "on" : "", onclick: () => { filter = v; draw(); } }, l)));
+    const cards = shown.map((p) => {
+      const note = h("input", { maxlength: 300, placeholder: "Note (optional)", value: p.admin_note || "", "aria-label": "Note" });
+      return h("div", { class: `card proposal sev-${p.severity}` },
+        h("div", { class: "proposal-top" }, h("span", { class: `pill sev ${p.severity}` }, p.severity), h("span", { class: "chip" }, p.kind),
+          p.status !== "pending" ? h("span", { class: `pill ${p.status === "approved" ? "in" : ""}` }, p.status) : null),
+        h("h3", {}, p.title),
+        h("p", { class: "small" }, h("b", {}, "Evidence: "), p.evidence),
+        h("p", { class: "small" }, h("b", {}, "Suggested change: "), p.suggestion),
+        p.status === "pending"
+          ? h("div", { class: "proposal-actions" }, note,
+              h("button", { class: "btn", onclick: () => decide(p.id, "deny", note.value) }, "Deny"),
+              h("button", { class: "btn primary", onclick: () => decide(p.id, "approve", note.value) }, "Approve"))
+          : h("div", { class: "proposal-actions" }, p.admin_note ? h("span", { class: "muted small grow" }, `Note: ${p.admin_note}`) : h("span", { class: "grow" }),
+              h("button", { class: "btn", onclick: () => decide(p.id, "reopen", p.admin_note || "") }, "Reopen")));
+    });
+    const fb = data.feedback;
+    page.replaceChildren(
+      h("div", { class: "intro" }, h("div", {}, h("h1", {}, "App Admin"),
+        h("p", { class: "muted" }, "The Improvement Scout reads runner feedback, chat check-ins the Concierge couldn't follow, errors and the agent trace, and proposes fixes. It can only suggest: nothing changes in the app until you approve it and a developer builds it."))),
+      h("div", { class: "card scout-card" },
+        h("div", { class: "panel-head" }, h("h2", {}, "Improvement Scout"), runBtn),
+        h("div", { class: "small muted" }, `Last run ${last} · runs every ${sc.every_minutes} minutes while the app is on · ${sc.mode === "model" ? "uses the AI model" : "no AI key, so it uses simple rules"} · ${sc.tokens_today.toLocaleString()} of ${sc.budget.toLocaleString()} tokens today`)),
+      h("div", { class: "panel-head" }, h("h2", {}, "Proposals"), seg),
+      cards.length ? h("div", { class: "proposals" }, cards) : h("p", { class: "muted" }, filter === "pending" ? "Nothing to review. Run the Scout, or wait for its next run." : "None here."),
+      h("div", { class: "card" },
+        h("div", { class: "panel-head" }, h("h2", {}, "Runner feedback"), h("span", { class: "muted small" }, fb.average ? `${fb.average} ★ average · ${fb.count} notes` : `${fb.count} notes`)),
+        fb.recent.length ? h("ul", { class: "fb-list" }, fb.recent.map((f) => h("li", { class: "fb" },
+          h("div", { class: "fb-top" }, h("b", {}, f.first), h("span", { class: "muted small" }, f.club || ""), f.rating ? h("span", { class: "fb-stars" }, "★".repeat(f.rating) + "☆".repeat(5 - f.rating)) : null, h("span", { class: "chip" }, f.topic)),
+          f.text ? h("div", {}, f.text) : null))) : h("p", { class: "muted" }, "No feedback yet."),
+        h("div", { class: "row2" },
+          h("button", { class: "btn", onclick: () => download("feedback", "finish-together-feedback.csv") }, "Export feedback (CSV)"),
+          h("button", { class: "btn", onclick: () => download("approved", "finish-together-approved-fixes.md") }, "Export approved fixes"))));
+  }
+  load();
 }
 
 // ---------------------------------------------------------------- page: one club
@@ -337,7 +492,7 @@ function clubPage(slug, tab) {
   const mapNote = h("div", { class: "small muted grow" });
   const replayClock = h("span", { class: "replay-clock", hidden: true });
   const replayBtn = h("button", { class: "btn", onclick: () => startReplay() }, "▶ Watch the run");
-  const editBtn = h("button", { class: "btn", hidden: true, onclick: () => openEditor() }, "Edit start & finish");
+  const editBtn = h("button", { class: "btn", hidden: true, onclick: () => openEditor() }, "Edit tonight's run");
   const mapWrap = h("div", { class: "map-wrap" }, mapBox, replayClock);
   const mapBar = h("div", { class: "map-bar" }, replayBtn, editBtn, mapNote);
   const editor = h("div", { class: "card route-editor", hidden: true });
@@ -408,8 +563,9 @@ function clubPage(slug, tab) {
 
   // Club panel
   const pClub = h("section", { class: "panel p-club" });
+  const pFeedback = h("section", { class: "panel p-feedback" });
 
-  body.append(pChat, pPlan, pAgents, pClub);
+  body.append(pChat, pPlan, pAgents, pClub, pFeedback);
   view.replaceChildren(h("div", { class: "club-page" }, head, tabs, body));
 
   function drawTabs() {
@@ -420,10 +576,11 @@ function clubPage(slug, tab) {
         tab = id; body.className = `club-body tab-${id}`; drawTabs();
         setTimeout(() => { if (planMap) planMap.invalidateSize(); if (settingsMap) settingsMap.invalidateSize(); }, 60);
         if (id === "chat") messages.scrollTop = messages.scrollHeight;
+        if (id === "feedback") drawFeedback();
       } }, label);
     const n = club && club.pending ? club.pending.length : 0;
     tabs.replaceChildren(t("plan", "Tonight"), t("chat", "Chat", "mobile-only"), t("agents", "Agents", "mobile-only"),
-      t("club", n ? `Club (${n})` : "Club"));
+      t("club", n ? `Club (${n})` : "Club"), t("feedback", "Feedback"));
   }
 
   // ------------- header and club tab
@@ -451,6 +608,56 @@ function clubPage(slug, tab) {
     if (!me.is_captain && !editor.hidden) closeEditor();
     drawTabs();
     drawClubTab();
+    if (tab === "feedback") drawFeedback();
+  }
+
+  // ------------- runner feedback: a post-run rating and a comment; the Improvement Scout reads these
+  async function drawFeedback() {
+    if (!club) return;
+    if (!club.me.is_member) {
+      pFeedback.replaceChildren(h("div", { class: "card" }, h("h2", {}, "Feedback"),
+        h("p", { class: "muted" }, "Join the club to rate runs and tell us what to improve.")));
+      return;
+    }
+    let data;
+    try { data = await api(`/api/clubs/${slug}/feedback`); } catch (e) { pFeedback.replaceChildren(h("div", { class: "empty" }, e.message)); return; }
+    const st = { rating: null, topic: data.topics[0] };
+    const stars = h("div", { class: "stars", role: "radiogroup", "aria-label": "Rate your last run" });
+    const topicSeg = h("div", { class: "chips pick" });
+    const text = h("textarea", { rows: 3, maxlength: 500, placeholder: "What worked, what didn't, what you'd change" });
+    const paint = () => {
+      stars.replaceChildren(...[1, 2, 3, 4, 5].map((n) => h("button", { type: "button", role: "radio", "aria-checked": st.rating === n ? "true" : "false",
+        "aria-label": `${n} out of 5`, class: st.rating && n <= st.rating ? "on" : "", onclick: () => { st.rating = n; paint(); } }, "★")));
+      topicSeg.replaceChildren(...data.topics.map((t) => h("button", { type: "button", class: `chip ${st.topic === t ? "on" : ""}`, onclick: () => { st.topic = t; paint(); } }, t)));
+    };
+    paint();
+    const form = h("form", { class: "form", onsubmit: async (e) => {
+      e.preventDefault();
+      try {
+        await api(`/api/clubs/${slug}/feedback`, { method: "POST", body: { rating: st.rating, topic: st.topic, text: text.value } });
+        toast("Thanks! The App Admin reviews every idea.");
+        drawFeedback();
+      } catch (err) { toast(err.message); }
+    } },
+      h("div", { class: "label" }, "How was your last run?"), stars,
+      h("div", { class: "label" }, "About"), topicSeg,
+      h("label", {}, "Tell us more", text),
+      h("button", { class: "btn primary block", type: "submit" }, "Send feedback"));
+    const when = (t) => new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const items = data.items.map((f) => h("li", { class: "fb" },
+      h("div", { class: "fb-top" }, h("b", {}, f.mine ? "You" : f.first), f.rating ? h("span", { class: "fb-stars", "aria-label": `${f.rating} out of 5` }, "★".repeat(f.rating) + "☆".repeat(5 - f.rating)) : null,
+        h("span", { class: "chip" }, f.topic), h("span", { class: "muted small" }, when(f.at))),
+      f.text ? h("div", {}, f.text) : null));
+    pFeedback.replaceChildren(
+      h("div", { class: "card" }, h("h2", {}, "Feedback"),
+        h("p", { class: "muted small" }, "Rate your last run and tell us what to fix. The Improvement Scout, an AI agent, reads every note and suggests changes; the App Admin decides what gets built."),
+        form),
+      h("div", { class: "card" }, h("div", { class: "panel-head" }, h("h2", {}, "What runners are saying"),
+          h("span", { class: "muted small" }, data.average ? `${data.average} ★ average · ${data.count} notes` : `${data.count} notes`)),
+        items.length ? h("ul", { class: "fb-list" }, items) : h("p", { class: "muted" }, "No feedback yet. Be the first.")),
+      h("div", { class: "card" }, h("h2", {}, "What's changing"),
+        data.changing.length ? h("ul", { class: "changing" }, data.changing.map((c) => h("li", {}, c.title)))
+          : h("p", { class: "muted small" }, "Approved fixes show up here.")));
   }
 
   function joinSheet() {
@@ -473,11 +680,14 @@ function clubPage(slug, tab) {
           h("li", {}, h("strong", {}, `${s.day}s ${clockAt(s.time, 0)}`), " ", s.what)))),
     ];
     if (me.is_captain) sections.push(requestsCard(), settingsCard());
-    sections.push(h("div", { class: "card" }, h("h2", {}, "Members"),
+    sections.push(h("div", { class: "card" }, h("div", { class: "panel-head" }, h("h2", {}, "Members"),
+        me.is_captain ? h("span", { class: "muted small" }, "Tap a name to make them a captain or remove them") : null),
       me.is_member
         ? h("div", { class: "member-list" }, club.member_list.map((m) =>
-            h("div", { class: "member" }, avatar(m.name, m.color), h("span", { class: "grow" }, m.name),
-              h("span", { class: "muted small" }, `${fmtPace(m.pace)}/mi`), m.role === "captain" ? h("span", { class: "pill cap" }, "Captain") : null)))
+            h(me.is_captain ? "button" : "div", { class: `member${me.is_captain ? " tappable" : ""}`, ...(me.is_captain ? { type: "button", onclick: () => memberSheet(m.id) } : {}) },
+              avatar(m.name, m.color), h("span", { class: "grow" }, m.name),
+              h("span", { class: "muted small" }, `${fmtPace(m.pace)}/mi`), m.role === "captain" ? h("span", { class: "pill cap" }, "Captain") : null,
+              me.is_captain ? h("span", { class: "muted" }, "›") : null)))
         : h("p", { class: "muted" }, `${club.members} members. Names are visible to members only.`)));
     pClub.replaceChildren(...sections);
   }
@@ -503,23 +713,23 @@ function clubPage(slug, tab) {
     } catch (e) { toast(e.message); }
   }
 
+  const currentPick = () => ({ start: [club.start_lat, club.start_lng], end: club.route_type === "point" ? [club.end_lat, club.end_lng] : null,
+    routeType: club.route_type, startName: club.start_name, endName: club.route_type === "point" ? (club.end_name || "") : "" });
+
   // ------------- captain: change the start and finish right on the Tonight map
   function openEditor() {
     if (!club || !club.me.is_captain) return;
     if (playing) { playing.stop(); playing = null; replayClock.hidden = true; replayBtn.disabled = false; }
-    let pick = { start: [club.start_lat, club.start_lng], end: club.route_type === "point" ? [club.end_lat, club.end_lng] : null, routeType: club.route_type };
-    const startName = h("input", { value: club.start_name, maxlength: 60, required: true, "aria-label": "Meeting point name" });
-    const endName = h("input", { value: club.route_type === "point" ? (club.end_name || "") : "", maxlength: 60, placeholder: "e.g. Boathouse Row", "aria-label": "Finish name" });
-    const endLabel = h("label", { hidden: club.route_type !== "point" }, "Finish name", endName);
-    const picker = mapPicker(pick, (p) => { pick = p; endLabel.hidden = p.routeType !== "point"; });
-    picker.addEventListener("placename", (e) => { (e.detail.which === "end" ? endName : startName).value = e.detail.name; });
+    let pick = currentPick();
+    const picker = mapPicker(pick, (p) => { pick = p; });
     picker.classList.add("big-picker");
+    const target = targetPicker(club.target_mode, club.target_value);
     setTimeout(() => (editMap = picker._map), 80);
     const save = h("button", { class: "btn primary", type: "submit" }, "Save and re-plan");
     editor.replaceChildren(h("form", { class: "form", onsubmit: async (e) => {
       e.preventDefault();
-      const body = { start_name: startName.value.trim() || "Start", start_lat: pick.start[0], start_lng: pick.start[1], route_type: pick.routeType };
-      if (pick.routeType === "point") Object.assign(body, { end_name: endName.value.trim() || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
+      const body = { start_name: pick.startName || "Start", start_lat: pick.start[0], start_lng: pick.start[1], route_type: pick.routeType, ...target.value() };
+      if (pick.routeType === "point") Object.assign(body, { end_name: pick.endName || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
       save.disabled = true;
       try {
         await api(`/api/clubs/${slug}`, { method: "PATCH", body });
@@ -528,9 +738,9 @@ function clubPage(slug, tab) {
         planKey = null; await loadClub(); poll();
       } catch (err) { save.disabled = false; toast(err.message); }
     } },
-      h("div", { class: "panel-head" }, h("h2", {}, "Start and finish"), h("span", { class: "muted small" }, "Only you see this, as captain")),
+      h("div", { class: "panel-head" }, h("h2", {}, "Tonight's run"), h("span", { class: "muted small" }, "Only you see this, as captain")),
+      target.node,
       picker,
-      h("label", {}, "Meeting point name", startName), endLabel,
       h("div", { class: "row2" }, h("button", { class: "btn", type: "button", onclick: closeEditor }, "Cancel"), save)));
     mapWrap.hidden = true; mapBar.hidden = true; editor.hidden = false;
     editor.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -543,29 +753,25 @@ function clubPage(slug, tab) {
   }
 
   function settingsCard() {
-    let pick = { start: [club.start_lat, club.start_lng], end: club.route_type === "point" ? [club.end_lat, club.end_lng] : null, routeType: club.route_type };
+    let pick = currentPick();
     const f = {
-      start_name: h("input", { value: club.start_name, maxlength: 60, required: true }),
-      end_name: h("input", { value: club.end_name || "", maxlength: 60, placeholder: "e.g. Boathouse Row" }),
       run_day: h("select", {}, DAYS.map((d) => h("option", { value: d, selected: d === club.run_day }, d))),
       run_time: h("input", { type: "time", value: club.run_time, required: true }),
     };
-    const endLabel = h("label", { hidden: club.route_type !== "point" }, "Finish name", f.end_name);
-    const picker = mapPicker(pick, (p) => { pick = p; endLabel.hidden = p.routeType !== "point"; });
-    picker.addEventListener("placename", (e) => { (e.detail.which === "end" ? f.end_name : f.start_name).value = e.detail.name; });
+    const picker = mapPicker(pick, (p) => { pick = p; });
     setTimeout(() => (settingsMap = picker._map), 80);
     const target = targetPicker(club.target_mode, club.target_value);
     return h("div", { class: "card" }, h("h2", {}, "Run settings"),
       h("p", { class: "muted small" }, "Changes go to the Run Director, which re-plans tonight's groups and posts the update."),
       h("form", { class: "form", onsubmit: async (e) => {
         e.preventDefault();
-        const body = { start_name: f.start_name.value, start_lat: pick.start[0], start_lng: pick.start[1],
+        const body = { start_name: pick.startName || "Start", start_lat: pick.start[0], start_lng: pick.start[1],
           run_day: f.run_day.value, run_time: f.run_time.value, route_type: pick.routeType, ...target.value() };
-        if (pick.routeType === "point") Object.assign(body, { end_name: f.end_name.value || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
+        if (pick.routeType === "point") Object.assign(body, { end_name: pick.endName || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
         try { await api(`/api/clubs/${slug}`, { method: "PATCH", body }); toast("Saved. The Run Director is updating the plan."); planKey = null; await loadClub(); poll(); }
         catch (err) { toast(err.message); }
       } },
-        h("label", {}, "Meeting point name", f.start_name), endLabel, picker,
+        picker,
         h("div", { class: "row2" }, h("label", {}, "Day", f.run_day), h("label", {}, "Start time", f.run_time)),
         target.node,
         h("button", { class: "btn primary block", type: "submit" }, "Save and re-plan")));
@@ -680,6 +886,27 @@ function clubPage(slug, tab) {
 
   const stick = (box, fn) => { const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60; fn(); if (atBottom) box.scrollTop = box.scrollHeight; };
 
+  let safetyGrid = null, safetyKey = null;
+  async function loadSafety() {
+    const key = `${club.start_lat},${club.start_lng}`;
+    if (key === safetyKey) return safetyGrid;
+    try { safetyGrid = await api(`/api/clubs/${slug}/safety`); } catch { safetyGrid = null; }
+    safetyKey = key;
+    return safetyGrid;
+  }
+  function showRouteInfo() {
+    if (!drawn) return;
+    drawn.routes.forEach((r) => {
+      const el = groupsBox.querySelector(`.group-route[data-g="${r.group.id}"]`);
+      if (!el) return;
+      const bits = [];
+      if (r.street && r.turns !== null) bits.push(`${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? " plus the turnaround" : ""}`);
+      if (r.riskLabel) bits.push(r.riskLabel);
+      el.textContent = bits.length ? `Route: ${bits.join(" · ")}` : "";
+      el.hidden = !bits.length;
+    });
+  }
+
   async function drawRoutes(plan) {
     const seq = ++drawSeq;
     if (!planMap) {
@@ -691,15 +918,16 @@ function clubPage(slug, tab) {
     if (drawn) planMap.removeLayer(drawn.layers);
     drawn = null;
     if (!plan || !plan.groups.length) { mapNote.textContent = "Routes appear once people check in."; return; }
-    mapNote.textContent = "Drawing routes…";
+    mapNote.textContent = "Finding straight, safer routes…";
     let d;
-    try { d = await FT_MAP.drawPlan(planMap, plan, (n) => (mapNote.textContent = n)); }
+    try { d = await FT_MAP.drawPlan(planMap, plan, (n) => (mapNote.textContent = n), await loadSafety()); }
     catch (e) {   // e.g. the page was left while routes were still drawing
       if (alive && seq === drawSeq) { console.warn("Map drawing stopped:", e); mapNote.textContent = "The map couldn't draw this plan. The groups below are still right."; }
       return;
     }
     if (seq !== drawSeq || !alive) { if (alive && planMap) planMap.removeLayer(d.layers); return; }   // a newer plan arrived meanwhile
     drawn = d;
+    showRouteInfo();
   }
 
   function startReplay() {
@@ -755,8 +983,44 @@ function clubPage(slug, tab) {
           h("div", { class: "small muted" }, `${g.headcount} runners · ${g.miles} miles · about ${Math.round(g.minutes)} min`)),
         h("div", { class: "group-back" }, g.back_at)),
       h("div", { class: "members" }, g.members.flatMap((m) => [avatar(m.name, m.color, "xs"), ...Array.from({ length: m.guests || 0 }, () => avatar("+ 1", "#b8b1a7", "xs"))])),
+      h("div", { class: "group-route small muted", "data-g": g.id, hidden: true }),
       canOpen ? h("div", { class: "group-more small" }, "See who's running ›") : null,
       ...((plan.conflicts || []).filter((c) => c.group === g.id).map((c) => h("div", { class: "conflict" }, `${c.name} wanted ${c.wanted_miles} mi; the Run Director's post has an option for them.`))))));
+    showRouteInfo();
+  }
+
+  // Captains: make someone a captain, step a captain down, or remove someone from the club (with a confirm step).
+  function memberSheet(id) {
+    const m = club.member_list.find((x) => x.id === id);
+    if (!m) { toast("That person isn't a member any more."); return; }
+    const captains = club.member_list.filter((x) => x.role === "captain").length;
+    const isCap = m.role === "captain", isMe = ME && ME.id === m.id, first = m.name.split(" ")[0];
+    const act = async (action, done) => {
+      try { club = (await api(`/api/clubs/${slug}/members/${m.id}`, { method: "POST", body: { action } })).club; closeSheet(); toast(done); planKey = null; await loadClub(); poll(); }
+      catch (e) { toast(e.message); }
+    };
+    const actions = h("div", { class: "member-actions" });
+    const paint = (confirming) => {
+      const lastCap = isCap && captains <= 1;
+      actions.replaceChildren(...(confirming ? [
+        h("p", {}, `Remove ${m.name} from ${club.name}? They'll lose access to the chat and tonight's plan, and they're taken out of tonight's groups. They can ask to join again later.`),
+        h("div", { class: "row2" }, h("button", { class: "btn", type: "button", onclick: () => paint(false) }, "Cancel"),
+          h("button", { class: "btn danger", type: "button", onclick: () => act("remove", `${first} was removed from the club.`) }, `Yes, remove ${first}`)),
+      ] : [
+        isCap
+          ? h("button", { class: "btn block", type: "button", disabled: lastCap, onclick: () => act("remove_captain", isMe ? "You stepped down as captain." : `${first} is no longer a captain.`) },
+              isMe ? "Step down as captain" : "Remove captain role")
+          : h("button", { class: "btn primary block", type: "button", onclick: () => act("make_captain", `${first} is now a captain.`) }, `Make ${first} a captain`),
+        h("button", { class: "btn danger-outline block", type: "button", disabled: lastCap, onclick: () => paint(true) }, isMe ? "Leave the club" : "Remove from club"),
+        lastCap ? h("p", { class: "small muted" }, "A club needs at least one captain. Make someone else a captain first.") : null,
+      ]));
+    };
+    paint(false);
+    openSheet(m.name, h("div", { class: "member-sheet" },
+      h("div", { class: "member-head" }, avatar(m.name, m.color),
+        h("div", {}, h("div", { class: "person-name" }, m.name, isCap ? h("span", { class: "pill cap" }, "Captain") : null, isMe ? h("span", { class: "pill in" }, "You") : null),
+          h("div", { class: "small muted" }, `Usually ${fmtPace(m.pace)}/mi, ${m.usual_miles} mi`))),
+      actions));
   }
 
   // Members only: who is in a pace group, with full names and today's pace and distance (never contact details).
@@ -771,7 +1035,9 @@ function clubPage(slug, tab) {
       const bits = [`Today ${fmtPace(m.pace)}/mi`, `wants ${m.miles} mi`];
       if (u && Math.abs(u.pace - m.pace) >= 1 / 12) bits.push(`usually ${fmtPace(u.pace)}`);
       const c = conflicts.find((x) => x.name === m.name);
-      return h("li", { class: "person-row" }, avatar(m.name, m.color),
+      const cap = club && club.me.is_captain && m.id;
+      return h("li", { class: `person-row${cap ? " tappable" : ""}`, ...(cap ? { role: "button", tabindex: "0", onclick: () => memberSheet(m.id),
+          onkeydown: (e) => { if (e.key === "Enter") memberSheet(m.id); } } : {}) }, avatar(m.name, m.color),
         h("div", { class: "grow" },
           h("div", { class: "person-name" }, m.name, ...tags),
           h("div", { class: "small muted" }, bits.join(" · ")),
@@ -785,6 +1051,9 @@ function clubPage(slug, tab) {
         h("div", {}, h("label", {}, "Time"), h("b", {}, `about ${Math.round(g.minutes)} min`)),
         h("div", {}, h("label", {}, "Finishes"), h("b", {}, g.back_at)),
         h("div", {}, h("label", {}, "People"), h("b", {}, `${g.headcount}${guests ? ` (${guests} guest${guests > 1 ? "s" : ""})` : ""}`))),
+      (() => { const r = drawn && drawn.routes.find((x) => x.group.id === g.id);
+        if (!r || !r.street) return null;
+        return h("p", { class: "small" }, `Route: ${r.miles.toFixed(1)} mi on the streets, ${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? ", turn around at the flag marked " + g.id : ""}${r.riskLabel ? `, ${r.riskLabel}` : ""}.`); })(),
       h("ul", { class: "person-list" }, rows),
       h("p", { class: "small muted" }, "Only club members see this. Phone numbers and emails are never shown.")));
   }

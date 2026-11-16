@@ -12,11 +12,11 @@ import threading
 import time
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agents, config, db, safety, tools
+from . import agents, config, crime, db, safety, scout, tools
 
 app = FastAPI(title="Finish Together")
 
@@ -60,6 +60,7 @@ def startup():
     db.init()
     if not db.clubs():
         seed()
+    scout.start_timer()
 
 
 # ----------------------------------------------------------------- helpers
@@ -116,8 +117,8 @@ def public_plan(plan, show_names):
 
 
 def describe(c):
-    cap = db.captain_of(c["id"])
-    return {**c, "captain": cap["name"] if cap else None,
+    caps = db.captains(c["id"])
+    return {**c, "captain": " and ".join(x["name"] for x in caps[:2]) + (f" +{len(caps) - 2}" if len(caps) > 2 else "") if caps else None,
             "target_label": agents.describe_target(c),
             "start_clock": tools.clock(0, c["run_time"]),
             "finish_name": agents.finish_name(c),
@@ -154,7 +155,8 @@ def people():
 @app.get("/api/me")
 def whoami(x_user_id: str | None = Header(None)):
     u = me(x_user_id)
-    return {"me": u, "memberships": db.my_memberships(u["id"]) if u else []}
+    return {"me": u, "memberships": db.my_memberships(u["id"]) if u else [],
+            "is_admin": bool(u and u["id"] in config.APP_ADMIN_IDS)}
 
 
 @app.post("/api/signup")
@@ -336,6 +338,42 @@ def decide(slug: str, runner_id: int, body: Decision, x_user_id: str | None = He
     return {"status": status}
 
 
+class MemberAction(BaseModel):
+    action: str     # make_captain, remove_captain or remove
+
+
+@app.post("/api/clubs/{slug}/members/{runner_id}")
+def manage_member(slug: str, runner_id: int, body: MemberAction, x_user_id: str | None = Header(None)):
+    """Captains only: make someone a captain, step a captain down, or remove someone from the club.
+    A club always keeps at least one captain."""
+    u, c = need_me(x_user_id), need_club(slug)
+    need_captain(c, u)
+    m = db.membership(c["id"], runner_id)
+    if not m or m["status"] != "approved":
+        raise HTTPException(404, "That person isn't a member of this club.")
+    r = db.runner(runner_id)
+    first, by = r["name"].split()[0], u["name"].split()[0]
+    last_captain = m["role"] == "captain" and db.captain_count(c["id"]) <= 1
+    if body.action == "make_captain":
+        db.set_membership(c["id"], runner_id, "captain", "approved", m["note"])
+        db.add_message(c["id"], agents.DIRECTOR, f"{by} made {first} a captain of {c['name']}.", "chat")
+    elif body.action == "remove_captain":
+        if last_captain:
+            raise HTTPException(400, "A club needs at least one captain. Make someone else a captain first.")
+        db.set_membership(c["id"], runner_id, "member", "approved", m["note"])
+    elif body.action == "remove":
+        if last_captain:
+            raise HTTPException(400, "A club needs at least one captain. Make someone else a captain before removing this one.")
+        was_running = db.remove_member(c["id"], runner_id)
+        db.add_message(c["id"], agents.DIRECTOR, f"{first} is no longer a member of {c['name']}.", "plan")
+        if was_running:
+            agents.start_director(c["id"], f"{r['name']} was removed from the club")
+    else:
+        raise HTTPException(400, "Unknown action.")
+    db.log_event(c["id"], "Club", "member", {"runner": r["name"], "action": body.action, "by": u["name"]})
+    return {"club": club_view(db.club(c["id"]), u)}
+
+
 @app.patch("/api/clubs/{slug}")
 def update_club(slug: str, body: ClubFields, x_user_id: str | None = Header(None)):
     u, c = need_me(x_user_id), need_club(slug)
@@ -480,6 +518,136 @@ def reset(slug: str, x_user_id: str | None = Header(None)):
     need_captain(c, u)
     open_evening(c["id"])
     return {"ok": True}
+
+
+# ----------------------------------------------------------------- street safety data for routes
+
+@app.get("/api/clubs/{slug}/safety")
+def safety_grid(slug: str):
+    """Violent-incident counts per small cell around the start (Philadelphia only). Counts only, no incident details."""
+    c = need_club(slug)
+    return crime.grid(c["start_lat"], c["start_lng"])
+
+
+# ----------------------------------------------------------------- runner feedback
+
+TOPICS = ["Routes", "Groups and pace", "Timing", "Safety", "The app", "Something else"]
+
+
+class Feedback(BaseModel):
+    rating: int | None = None
+    topic: str = "Something else"
+    text: str = ""
+
+
+@app.post("/api/clubs/{slug}/feedback")
+def give_feedback(slug: str, body: Feedback, x_user_id: str | None = Header(None)):
+    u, c = need_me(x_user_id), need_club(slug)
+    need_member(c, u)
+    if body.rating is not None and not 1 <= body.rating <= 5:
+        raise HTTPException(400, "Rating is 1 to 5.")
+    if body.topic not in TOPICS:
+        raise HTTPException(400, "Pick a topic.")
+    text = screen("Feedback", body.text, 500, c["id"])
+    text = safety.scrub_outgoing(c["id"], "Feedback", text)    # no phone numbers or emails stored
+    if body.rating is None and not text:
+        raise HTTPException(400, "Add a rating or a few words.")
+    db.add_feedback(c["id"], u["id"], body.rating, body.topic, text)
+    return {"ok": True}
+
+
+@app.get("/api/clubs/{slug}/feedback")
+def club_feedback(slug: str, x_user_id: str | None = Header(None)):
+    """Members see what their club has said (first names only) and which fixes the App Admin approved."""
+    u, c = need_me(x_user_id), need_club(slug)
+    need_member(c, u)
+    fb = db.feedback(c["id"], limit=40)
+    rated = [f["rating"] for f in fb if f["rating"]]
+    return {"topics": TOPICS,
+            "average": round(sum(rated) / len(rated), 1) if rated else None,
+            "count": len(fb),
+            "items": [{"first": (f["runner"] or "Runner").split()[0], "rating": f["rating"], "topic": f["topic"],
+                       "text": f["text"], "at": f["created_at"], "mine": f["runner_id"] == u["id"]} for f in fb],
+            "changing": [{"title": p["title"], "status": p["status"]} for p in db.proposals("approved")][:8]}
+
+
+class ClientError(BaseModel):
+    page: str = ""
+    message: str = ""
+
+
+@app.post("/api/client-error")
+def client_error(body: ClientError):
+    """The page reports its own script errors so the Improvement Scout can see them."""
+    if len(db.client_errors(time.time() - 3600)) < 50:     # a small cap against floods
+        db.add_client_error(body.page, body.message)
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------- App Admin and the Improvement Scout
+
+def need_admin(x_user_id):
+    u = need_me(x_user_id)
+    if u["id"] not in config.APP_ADMIN_IDS:
+        raise HTTPException(403, "Only the App Admin can do that.")
+    return u
+
+
+@app.get("/api/admin")
+def admin_home(x_user_id: str | None = Header(None)):
+    need_admin(x_user_id)
+    fb = db.feedback(limit=200)
+    rated = [f["rating"] for f in fb if f["rating"]]
+    return {"proposals": db.proposals(),
+            "feedback": {"count": len(fb), "average": round(sum(rated) / len(rated), 1) if rated else None,
+                         "recent": [{"club": f["club"], "first": (f["runner"] or "Runner").split()[0], "rating": f["rating"],
+                                     "topic": f["topic"], "text": f["text"], "at": f["created_at"]} for f in fb[:20]]},
+            "scout": {"last_run": scout.last_run(), "every_minutes": config.SCOUT_EVERY_MINUTES,
+                      "tokens_today": db.scout_tokens_today(), "budget": config.SCOUT_TOKEN_BUDGET,
+                      "mode": "model" if config.MODE != "demo" else "rules"}}
+
+
+@app.post("/api/admin/scout")
+def admin_run_scout(x_user_id: str | None = Header(None)):
+    need_admin(x_user_id)
+    return scout.run_scout("on demand")
+
+
+class AdminDecision(BaseModel):
+    decision: str
+    note: str = ""
+
+
+@app.post("/api/admin/proposals/{pid}")
+def admin_decide(pid: int, body: AdminDecision, x_user_id: str | None = Header(None)):
+    need_admin(x_user_id)
+    status = {"approve": "approved", "deny": "denied", "reopen": "pending"}.get(body.decision)
+    if not status:
+        raise HTTPException(400, "Decision is approve, deny or reopen.")
+    note = screen("Note", body.note, 300)
+    db.decide_proposal(pid, status, note)
+    return {"proposals": db.proposals()}
+
+
+@app.get("/api/admin/export")
+def admin_export(what: str = "approved", x_user_id: str | None = Header(None)):
+    """approved: a Markdown to-do list for a developer. feedback: a CSV of runner feedback (first names only)."""
+    need_admin(x_user_id)
+    if what == "feedback":
+        lines = ["club,first_name,rating,topic,feedback,date"]
+        for f in db.feedback(limit=10000):
+            cells = [f["club"] or "", (f["runner"] or "Runner").split()[0], str(f["rating"] or ""), f["topic"] or "",
+                     f["text"] or "", time.strftime("%Y-%m-%d", time.localtime(f["created_at"]))]
+            lines.append(",".join('"' + x.replace('"', '""') + '"' for x in cells))
+        return PlainTextResponse("\n".join(lines) + "\n", media_type="text/csv")
+    out = ["# Finish Together: approved improvements", "",
+           "Proposed by the Improvement Scout, approved by the App Admin. Nothing here has been changed in the app yet.", ""]
+    for p in db.proposals("approved"):
+        out += [f"- [ ] **{p['title']}** ({p['severity']}, {p['kind']})",
+                f"  - Evidence: {p['evidence']}", f"  - Suggested change: {p['suggestion']}"]
+        if p["admin_note"]:
+            out.append(f"  - Admin note: {p['admin_note']}")
+    return PlainTextResponse("\n".join(out) + "\n", media_type="text/markdown")
 
 
 # ----------------------------------------------------------------- page

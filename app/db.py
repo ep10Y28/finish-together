@@ -43,6 +43,18 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT, club_id INTEGER, plan_json TEXT, reason TEXT, created_at REAL
 );
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, club_id INTEGER, runner_id INTEGER, rating INTEGER,
+  topic TEXT, text TEXT, created_at REAL
+);
+CREATE TABLE IF NOT EXISTS proposals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, fingerprint TEXT UNIQUE, title TEXT, kind TEXT, severity TEXT,
+  evidence TEXT, suggestion TEXT, status TEXT DEFAULT 'pending', admin_note TEXT,
+  created_at REAL, decided_at REAL
+);
+CREATE TABLE IF NOT EXISTS client_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, page TEXT, message TEXT, created_at REAL
+);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, club_id INTEGER, agent TEXT, kind TEXT, detail TEXT,
   tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0, cost REAL DEFAULT 0,
@@ -211,6 +223,24 @@ def captain_of(club_id):
     return r[0] if r else None
 
 
+def captain_count(club_id):
+    return rows("SELECT COUNT(*) AS n FROM memberships WHERE club_id=? AND role='captain' AND status='approved'", (club_id,))[0]["n"]
+
+
+def captains(club_id):
+    return rows("""SELECT r.id, r.name FROM memberships m JOIN runners r ON r.id=m.runner_id
+                   WHERE m.club_id=? AND m.role='captain' AND m.status='approved' ORDER BY m.updated_at""", (club_id,))
+
+
+def remove_member(club_id, runner_id):
+    """Takes someone out of the club and tonight's run. Returns True if they had checked in as in or maybe."""
+    had = rows("SELECT status FROM checkins WHERE club_id=? AND runner_id=?", (club_id, runner_id))
+    run("UPDATE memberships SET status='removed', role='member', updated_at=? WHERE club_id=? AND runner_id=?",
+        (time.time(), club_id, runner_id))
+    run("DELETE FROM checkins WHERE club_id=? AND runner_id=?", (club_id, runner_id))
+    return bool(had and had[0]["status"] in ("in", "maybe"))
+
+
 def members(club_id, status="approved"):
     return rows("""SELECT r.id, r.name, r.pace, r.usual_miles, r.color, m.role, m.note, m.updated_at
                    FROM memberships m JOIN runners r ON r.id=m.runner_id
@@ -309,3 +339,57 @@ def token_totals(club_id=None):
     total = rows(f"SELECT COALESCE(SUM(tokens_in),0) AS tin, COALESCE(SUM(tokens_out),0) AS tout, "
                  f"COALESCE(SUM(cost),0) AS cost FROM events {where}", args)[0]
     return {"by_agent": by_agent, "total": total}
+
+
+# ---------- feedback, proposals and the App Admin queue ----------
+
+def add_feedback(club_id, runner_id, rating, topic, text):
+    return run("INSERT INTO feedback (club_id,runner_id,rating,topic,text,created_at) VALUES (?,?,?,?,?,?)",
+               (club_id, runner_id, rating, topic, text, time.time()))
+
+
+def feedback(club_id=None, since=0.0, limit=200):
+    where, args = ["f.created_at > ?"], [since]
+    if club_id is not None:
+        where.append("f.club_id = ?"); args.append(club_id)
+    return rows(f"""SELECT f.id, f.club_id, c.name AS club, f.runner_id, r.name AS runner, f.rating, f.topic, f.text, f.created_at
+                    FROM feedback f LEFT JOIN runners r ON r.id=f.runner_id LEFT JOIN clubs c ON c.id=f.club_id
+                    WHERE {' AND '.join(where)} ORDER BY f.id DESC LIMIT ?""", (*args, limit))
+
+
+def add_proposal(fingerprint, title, kind, severity, evidence, suggestion):
+    """Adds a proposal unless one with the same fingerprint exists. Returns True if added."""
+    with conn() as c:
+        cur = c.execute("""INSERT OR IGNORE INTO proposals (fingerprint,title,kind,severity,evidence,suggestion,created_at)
+                           VALUES (?,?,?,?,?,?,?)""", (fingerprint, title, kind, severity, evidence, suggestion, time.time()))
+        return cur.rowcount > 0
+
+
+def proposals(status=None):
+    if status:
+        return rows("SELECT * FROM proposals WHERE status=? ORDER BY id DESC", (status,))
+    return rows("SELECT * FROM proposals ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC")
+
+
+def decide_proposal(pid, status, note=""):
+    run("UPDATE proposals SET status=?, admin_note=?, decided_at=? WHERE id=?", (status, note, time.time(), pid))
+
+
+def add_client_error(page, message):
+    run("INSERT INTO client_errors (page,message,created_at) VALUES (?,?,?)", (page[:200], message[:500], time.time()))
+
+
+def client_errors(since=0.0):
+    return rows("SELECT * FROM client_errors WHERE created_at > ? ORDER BY id DESC LIMIT 50", (since,))
+
+
+def events_since(since, kinds):
+    marks = ",".join("?" * len(kinds))
+    return rows(f"SELECT * FROM events WHERE created_at > ? AND kind IN ({marks}) ORDER BY id DESC LIMIT 200", (since, *kinds))
+
+
+def scout_tokens_today():
+    start = time.time() - 24 * 3600
+    r = rows("SELECT COALESCE(SUM(tokens_in),0)+COALESCE(SUM(tokens_out),0) AS n FROM events "
+             "WHERE club_id IS NULL AND agent='Improvement Scout' AND created_at > ?", (start,))
+    return int(r[0]["n"])

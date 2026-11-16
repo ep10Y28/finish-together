@@ -62,3 +62,8 @@ MIN_GROUP_SIZE = 2              # no one runs alone
 ROUTE_STEP_MILES = 0.25         # group distances are rounded to quarter miles
 MAX_FINISH_SPREAD = 6           # minutes; a plan whose groups come back further apart is rejected
 DEFAULT_TARGET_MINUTES = 45
+
+# App Admin and the Improvement Scout
+APP_ADMIN_IDS = {25}            # demo App Admin: Rae Simmons (also Last Lap's captain)
+SCOUT_EVERY_MINUTES = 30        # the Scout also runs on demand from the Admin page
+SCOUT_TOKEN_BUDGET = 30_000     # per day, separate from the clubs' run budgets

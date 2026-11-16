@@ -4,6 +4,12 @@
 // into a line on real streets, starting at the club's meeting point and ending at
 // the start (a loop) or at the club's chosen finish (point to point).
 //
+// Routes are kept simple so nobody gets lost: every group runs the same shape (out and
+// back along one long street for a loop) and only the turnaround point differs. The shape
+// is picked from a few candidates by counting turns, matching the planned distance and, in
+// Philadelphia, avoiding streets with more violent incidents in the last 12 months
+// (counts per ~200 m cell from the server, see app/crime.py).
+//
 // Street routes come from the free OpenStreetMap foot router run by FOSSGIS
 // (routing.openstreetmap.de, no key needed). If it can't be reached, the map falls
 // back to a straight-line sketch of the same shape, drawn dashed and labelled.
@@ -42,22 +48,44 @@ const FT_MAP = (() => {
   }
   const lineMiles = (pts) => pts.slice(1).reduce((s, p, i) => s + dist(pts[i], p), 0);
 
-  // Waypoints whose straight-line length is `straight` miles.
-  // Loop: start -> A -> B -> start, an equilateral triangle pointing along `bearingDeg`.
-  // Point to point: start -> W -> finish, W pushed sideways off the midpoint far enough to add the extra distance.
-  function waypoints(start, end, straight, i) {
+  // ---------- route shapes ----------
+  // Runners get lost at turns, so routes are built from simple shapes that keep to one or two
+  // long streets: out and back along one bearing for a loop, and for a separate finish either a
+  // straight line, an overshoot past the finish and back, a backtrack behind the start first, or a
+  // wide detour to one side. The router then follows real streets between those points.
+  // Loop candidates: out and back along 8 compass bearings. Point candidates: the four shapes.
+  function shapes(start, end) {
+    if (!end) return [0, 45, 90, 135, 180, 225, 270, 315].map((b) => ({ kind: "outback", bearing: b }));
+    return [{ kind: "overshoot" }, { kind: "backtrack" }, { kind: "detour", side: 90 }, { kind: "detour", side: -90 }];
+  }
+  function waypoints(start, end, straight, shape) {
     if (!end) {
-      const r = straight / 3;
-      const b = (i * 137.5) % 360;             // spread groups around the start
-      return [start, dest(start, b - 30, r), dest(start, b + 30, r), start];
+      if (shape.kind === "triangle") {
+        const r = straight / 3, b = shape.bearing || 0;
+        return [start, dest(start, b - 30, r), dest(start, b + 30, r), start];
+      }
+      return [start, dest(start, shape.bearing, straight / 2), start];
     }
     const d = dist(start, end);
     if (straight <= d * 1.05) return [start, end];
+    const extra = straight - d, b = bearing(start, end);
+    if (shape.kind === "overshoot") return [start, dest(end, b, extra / 2), end];
+    if (shape.kind === "backtrack") return [start, dest(start, b + 180, extra / 2), end];
     const half = straight / 2;
     const h = Math.sqrt(Math.max(0, half * half - (d * d) / 4));
     const mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
-    const side = i % 2 === 0 ? 90 : -90;      // alternate sides so routes don't sit on top of each other
-    return [start, dest(mid, bearing(start, end) + side, h), end];
+    return [start, dest(mid, b + shape.side, h), end];
+  }
+
+  // A turn is a left or right (not a slight bend) or a roundabout; leaving and arriving don't count.
+  function countTurns(r) {
+    let n = 0;
+    for (const leg of r.legs || []) for (const st of leg.steps || []) {
+      const t = st.maneuver.type, m = st.maneuver.modifier || "";
+      if (t === "depart" || t === "arrive") continue;
+      if (t === "roundabout" || t === "rotary" || (/left|right|uturn/.test(m) && !/slight/.test(m))) n++;
+    }
+    return n;
   }
 
   async function osrm(pts) {
@@ -65,38 +93,85 @@ const FT_MAP = (() => {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 8000);
     try {
-      const r = await fetch(`${ROUTER}${coords}?overview=full&geometries=geojson`, { signal: ctl.signal });
+      const r = await fetch(`${ROUTER}${coords}?overview=full&geometries=geojson&steps=true`, { signal: ctl.signal });
       if (!r.ok) throw new Error(`router ${r.status}`);
       const j = await r.json();
       if (j.code !== "Ok" || !j.routes || !j.routes.length) throw new Error("no route");
-      return { pts: j.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng]), miles: j.routes[0].distance / MI };
+      const best = j.routes[0];
+      return { pts: best.geometry.coordinates.map(([lng, lat]) => [lat, lng]), miles: best.distance / MI,
+               turns: countTurns(best),
+               turnaround: pts.length === 3 && j.waypoints && j.waypoints[1] ? [j.waypoints[1].location[1], j.waypoints[1].location[0]] : null };
     } finally {
       clearTimeout(t);
     }
   }
 
-  // One group's route. Returns {pts, miles, street: bool}.
-  async function route(start, end, miles, i) {
-    const key = JSON.stringify([start, end, miles, i]);
+  // ---------- street safety ----------
+  // The server sends counts of violent incidents in the last 12 months per ~200 m cell (Philadelphia only).
+  // A route's score is the average count in the cells it passes through, against the area's average.
+  function safetyIndex(grid) {
+    if (!grid || !grid.available || !grid.cells) return null;
+    const k = 1 / grid.cell, m = new Map();
+    grid.cells.forEach(([la, ln, n]) => m.set(`${Math.round(la * k)},${Math.round(ln * k)}`, n));
+    return { at: ([la, ln]) => m.get(`${Math.round(la * k)},${Math.round(ln * k)}`) || 0, baseline: Math.max(grid.baseline || 0, 0.01) };
+  }
+  function riskOf(pts, idx) {
+    if (!idx || pts.length < 2) return null;
+    let sum = 0, n = 0;
+    for (let f = 0; f <= 1.0001; f += 0.01) { sum += idx.at(along(pts, f)); n++; }
+    return sum / n / idx.baseline;           // 1 = the area's average
+  }
+  const riskLabel = (r) => r === null || r === undefined ? null
+    : r < 0.75 ? "fewer recent incidents than nearby streets"
+    : r <= 1.25 ? "about average for nearby streets" : "more recent incidents than nearby streets";
+
+  // Lower is better: few turns per mile, close to the planned distance, and quieter streets when data exists.
+  function score(got, target, risk) {
+    const err = Math.abs(got.miles - target) / target;
+    return got.turns / Math.max(got.miles, 0.5) + Math.max(0, err - 0.08) * 10 + (risk === null ? 0 : risk * 1.2);
+  }
+
+  const shapeCache = new Map();
+  async function pickShape(start, end, miles, idx) {
+    const key = JSON.stringify([start, end, Math.round(miles * 2) / 2, !!idx]);
+    if (shapeCache.has(key)) return shapeCache.get(key);
+    let best = null;
+    for (const shape of shapes(start, end)) {
+      try {
+        const got = await osrm(waypoints(start, end, miles / STREET_FACTOR, shape));
+        const s = score(got, miles, riskOf(got.pts, idx));
+        if (!best || s < best.s) best = { shape, s };
+      } catch (e) {
+        if (!best) throw e;                       // the router is down: stop trying shapes
+      }
+    }
+    const shape = best ? best.shape : end ? { kind: "detour", side: 90 } : { kind: "outback", bearing: 45 };
+    shapeCache.set(key, shape);
+    return shape;
+  }
+
+  // One group's route. Returns {pts, miles, street, turns, risk, turnaround}.
+  async function route(start, end, miles, shape, idx) {
+    const key = JSON.stringify([start, end, miles, shape, !!idx]);
     if (cache.has(key)) return cache.get(key);
     let straight = miles / STREET_FACTOR;
     let best = null;
     if (!routerDown) {
       try {
-        for (let attempt = 0; attempt < 2; attempt++) {
-          const got = await osrm(waypoints(start, end, straight, i));
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const got = await osrm(waypoints(start, end, straight, shape));
           if (!best || Math.abs(got.miles - miles) < Math.abs(best.miles - miles)) best = got;
           if (Math.abs(got.miles - miles) / miles < 0.06) break;
-          straight *= miles / got.miles;          // one correction pass gets most routes within a few percent
+          straight *= miles / got.miles;          // a correction pass or two gets most routes within a few percent
         }
       } catch (e) {
         routerDown = true;
         console.warn("Street routing unavailable, drawing approximate shapes.", e);
       }
     }
-    const out = best ? { ...best, street: true } : (() => {
-      const pts = waypoints(start, end, miles, i);
-      return { pts, miles: lineMiles(pts), street: false };
+    const out = best ? { ...best, street: true, risk: riskOf(best.pts, idx) } : (() => {
+      const pts = waypoints(start, end, miles, shape);
+      return { pts, miles: lineMiles(pts), street: false, turns: null, risk: null, turnaround: null };
     })();
     cache.set(key, out);
     return out;
@@ -128,30 +203,53 @@ const FT_MAP = (() => {
   }
 
   // Draw every group's route. Returns {layers, routes} so the replay can move dots along them.
-  async function drawPlan(map, plan, onNote) {
+  // safetyGrid: what /api/clubs/<slug>/safety returned, or null.
+  async function drawPlan(map, plan, onNote, safetyGrid) {
     const layers = L.layerGroup().addTo(map);
     if (!plan || !plan.start) return { layers, routes: [] };
     const start = [plan.start.lat, plan.start.lng];
     const end = plan.route && plan.route.type === "point" && plan.route.end ? [plan.route.end.lat, plan.route.end.lng] : null;
+    const idx = safetyIndex(safetyGrid);
     pin(layers, start, `Start: ${plan.start.name}`, "start");
     if (end) pin(layers, end, `Finish: ${plan.route.end.name}`, "finish");
-    const routes = [];
     const bounds = L.latLngBounds([start, ...(end ? [end] : [])]);
-    let sketched = false;
+    // Every group runs the same simple shape, so groups share the same streets and differ only in how far they go.
+    let shape = end ? { kind: "detour", side: 90 } : { kind: "outback", bearing: 45 };
+    const longest = Math.max(...plan.groups.map((g) => g.miles), 0.5);
+    if (!routerDown) {
+      try { shape = await pickShape(start, end, longest, idx); }
+      catch (e) { routerDown = true; console.warn("Street routing unavailable, drawing approximate shapes.", e); }
+    }
+    const routes = [];
     for (let i = 0; i < plan.groups.length; i++) {   // one at a time, to be polite to the free router
       const g = plan.groups[i];
-      const r = await route(start, end, g.miles, i);
-      if (!r.street) sketched = true;
-      const line = L.polyline(r.pts, { color: groupColor(i), weight: 5, opacity: 0.85,
-                                       dashArray: r.street ? null : "8 8" }).addTo(layers);
-      line.bindTooltip(`Group ${g.id}: ${g.miles} mi plan${r.street ? `, ${r.miles.toFixed(1)} mi on these streets` : " (sketch)"}`);
+      const r = await route(start, end, g.miles, shape, idx);
+      routes.push({ group: g, i, pts: r.pts, miles: r.miles, color: groupColor(i), street: r.street,
+                    turns: r.turns, risk: r.risk, riskLabel: riskLabel(r.risk), turnaround: r.turnaround });
       r.pts.forEach((p) => bounds.extend(p));
-      routes.push({ group: g, pts: r.pts, miles: r.miles, color: groupColor(i), street: r.street });
     }
+    // Longest first and widest, so groups that share streets show as nested stripes.
+    const order = [...routes].sort((a, b) => b.miles - a.miles);
+    order.forEach((r, k) => {
+      const w = Math.max(3, 11 - k * 2);
+      const line = L.polyline(r.pts, { color: r.color, weight: w, opacity: 0.9, dashArray: r.street ? null : "8 8" }).addTo(layers);
+      const bits = [`Group ${r.group.id}: ${r.group.miles} mi plan`];
+      if (r.street) bits.push(`${r.miles.toFixed(1)} mi on these streets`, `${r.turns} turns`);
+      else bits.push("sketch");
+      if (r.riskLabel) bits.push(r.riskLabel);
+      line.bindTooltip(bits.join(", "));
+      if (r.turnaround) {
+        const icon = L.divIcon({ className: "turn-flag", html: `<span style="background:${r.color}">${r.group.id}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] });
+        L.marker(r.turnaround, { icon, keyboard: false }).addTo(layers).bindTooltip(`Group ${r.group.id} turns around here`);
+      }
+    });
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 15 });
+    const sketched = routes.some((r) => !r.street);
     if (onNote) onNote(sketched
       ? "Street routing couldn't be reached, so routes are sketched as straight lines (dashed)."
-      : "Routes follow real streets from OpenStreetMap. Street distance can differ a little from the plan.");
+      : `Routes keep to long straight streets with few turns${end ? "" : "; each group turns around at its numbered flag"}. `
+        + (idx ? "They also avoid streets with more violent incidents in the last 12 months (Philadelphia police data)."
+               : (safetyGrid && safetyGrid.note) || "No street safety data here."));
     return { layers, routes };
   }
 
@@ -202,5 +300,5 @@ const FT_MAP = (() => {
     return { stop() { cancelAnimationFrame(raf); map.removeLayer(dots); } };
   }
 
-  return { makeMap, pin, drawPlan, replay, groupColor, hasLeaflet, dist };
+  return { makeMap, pin, drawPlan, replay, groupColor, hasLeaflet, dist, riskLabel };
 })();

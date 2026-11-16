@@ -306,6 +306,7 @@ def rule_concierge(club_id, me, text, check_in):
         w = who_is_coming(club_id)
         return f"{w['headcount']} going so far, {len(w['maybe'])} maybes, in {len(w['groups'])} groups."
     if re.search(r"\d|\b(run|running|pace|mile|miles|tonight|today|join|come|coming|friend|late)\b", t):
+        db.log_event(club_id, "Concierge", "unparsed", {"text": text[:160]})   # the Improvement Scout reads these
         return ("I'm in demo mode without the AI key, so I only follow simple check-ins like "
                 "\"in, 5 miles at 9:30, bringing a friend\". With the course key I understand any phrasing.")
     return None
