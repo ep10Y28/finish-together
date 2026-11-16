@@ -28,6 +28,11 @@ RUNNER = {"X-User-Id": "2"}        # Jordan, a member
 STRANGER = {"X-User-Id": "43"}     # Chris, asked to join, not approved yet
 
 
+def db_plan_style():
+    from app import db
+    return (db.latest_plan(db.club("last-lap")["id"])["route"] or {}).get("style")
+
+
 def wait_for_director(slug="last-lap"):
     time.sleep(0.3)
     with agents.director_lock(1):
@@ -119,7 +124,24 @@ with TestClient(app) as c:
     names = [m["name"] for m in c.get("/api/clubs/last-lap", headers=CAPTAIN).json()["club"]["member_list"]]
     assert "Alicia Gomez" not in names
 
+
+    # Calendar and past runs: sign up ahead, past runs logged, captain logs the run and the next date opens
+    cal = c.get("/api/clubs/last-lap/runs", headers=RUNNER).json()
+    assert cal["past"] and cal["dates"][0]["state"] == "next", "demo history and calendar missing"
+    later = cal["dates"][1]["date"]
+    assert c.post(f"/api/clubs/last-lap/calendar/{later}/signup", headers=RUNNER,
+                  json={"status": "in", "pace": "10:30", "miles": 5}).status_code == 200
+    assert c.patch("/api/clubs/last-lap", headers=CAPTAIN, json={"route_style": "together"}).status_code == 200
+    wait_for_director()
+    assert db_plan_style() == "together"
+    done = c.post("/api/clubs/last-lap/finish", headers=CAPTAIN).json()
+    assert done["logged"] and done["next"] == later
+    mine = c.get("/api/clubs/last-lap/state", headers=RUNNER).json()["my_checkin"]
+    assert mine and mine["status"] == "in", "a sign-up should become the check-in when its date is next"
+    assert c.get("/api/clubs/last-lap/runs", headers=RUNNER).json()["past"][0]["date"] == cal["dates"][0]["date"]
+
     print(f"OK: loop plan {loop_msg}; point-to-point plan {len(plan['groups'])} groups, "
           f"{plan['spread_minutes']} min apart; casual check-in understood; injection blocked; member approval enforced; "
-          "feedback, Scout review and captain controls work.")
+          "feedback, Scout review, captain controls, "
+          "run-together routes, sign-ups ahead and the past-run log work.")
 config.DB_PATH.unlink(missing_ok=True)

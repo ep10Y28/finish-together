@@ -106,6 +106,22 @@ const FT_MAP = (() => {
     }
   }
 
+  // Split a line at a fraction of its length: returns [before, after], both including the split point.
+  function splitAt(pts, frac) {
+    const total = lineMiles(pts);
+    let goal = total * frac;
+    for (let i = 1; i < pts.length; i++) {
+      const d = dist(pts[i - 1], pts[i]);
+      if (goal <= d) {
+        const t = d ? goal / d : 0;
+        const p = [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t];
+        return [[...pts.slice(0, i), p], [p, ...pts.slice(i)], i];
+      }
+      goal -= d;
+    }
+    return [pts, [pts[pts.length - 1]], pts.length - 1];
+  }
+
   // ---------- street safety ----------
   // The server sends counts of violent incidents in the last 12 months per ~200 m cell (Philadelphia only).
   // A route's score is the average count in the cells it passes through, against the area's average.
@@ -220,6 +236,8 @@ const FT_MAP = (() => {
       try { shape = await pickShape(start, end, longest, idx); }
       catch (e) { routerDown = true; console.warn("Street routing unavailable, drawing approximate shapes.", e); }
     }
+    const together = plan.route && plan.route.style === "together" && plan.groups.length > 1;
+    if (together) return drawTogether(map, plan, layers, start, end, idx, bounds, onNote, safetyGrid);
     const routes = [];
     for (let i = 0; i < plan.groups.length; i++) {   // one at a time, to be polite to the free router
       const g = plan.groups[i];
@@ -251,6 +269,66 @@ const FT_MAP = (() => {
         + (idx ? "They also avoid streets with more violent incidents in the last 12 months (Philadelphia police data)."
                : (safetyGrid && safetyGrid.note) || "No street safety data here."));
     return { layers, routes };
+  }
+
+  // "Run together": every group runs one shared route, the slowest group's distance. The first stretch has no
+  // splits so the club starts as one pack. Each faster group leaves the shared route at its numbered flag for a
+  // short out-and-back of exactly its extra distance, then rejoins, so everyone still finishes together.
+  async function drawTogether(map, plan, layers, start, end, idx, bounds, onNote, safetyGrid) {
+    const PACK = 0.3;                                         // no splits in the first 30% of the shared route
+    const baseMiles = Math.min(...plan.groups.map((g) => g.miles));
+    let shape = end ? { kind: "detour", side: 90 } : { kind: "outback", bearing: 45 };
+    if (!routerDown) {
+      try { shape = await pickShape(start, end, baseMiles, idx); }
+      catch (e) { routerDown = true; console.warn("Street routing unavailable, drawing approximate shapes.", e); }
+    }
+    const main = await route(start, end, baseMiles, shape, idx);
+    main.pts.forEach((p) => bounds.extend(p));
+    const order = plan.groups.map((g, i) => ({ g, i, extra: g.miles - baseMiles })).filter((x) => x.extra > 0.1)
+      .sort((a, b) => a.extra - b.extra);
+    const spurs = new Map();
+    for (let k = 0; k < order.length; k++) {
+      const { g, i, extra } = order[k];
+      const frac = order.length === 1 ? 0.5 : PACK + 0.05 + (k / (order.length - 1)) * (0.65 - PACK - 0.05);
+      const [before, after, at] = splitAt(main.pts, frac);
+      const here = before[before.length - 1];
+      const ahead = main.pts[Math.min(at, main.pts.length - 1)];
+      const side = (k % 2 ? -90 : 90) + (dist(here, ahead) > 0.005 ? bearing(here, ahead) : 0);
+      const spur = await route(here, null, extra, { kind: "outback", bearing: side }, idx);
+      spur.pts.forEach((p) => bounds.extend(p));
+      spurs.set(i, { here, spur, pts: [...before, ...spur.pts.slice(1), ...after.slice(1)] });
+    }
+    const routes = plan.groups.map((g, i) => {
+      const s = spurs.get(i);
+      const pts = s ? s.pts : main.pts;
+      const street = main.street && (!s || s.spur.street);
+      return { group: g, i, pts, miles: lineMiles(pts), color: groupColor(i), street,
+               turns: street ? main.turns + (s ? s.spur.turns : 0) : null, risk: riskOf(pts, idx),
+               riskLabel: riskLabel(riskOf(pts, idx)), turnaround: s ? s.spur.turnaround : null, split: s ? s.here : null };
+    });
+    // The shared route in the color of the group that runs only that, drawn wide; add-ons on top in each group's color.
+    const baseGroup = routes.find((r) => !spurs.has(r.i)) || routes[0];
+    L.polyline(main.pts, { color: "#1f3a5f", weight: 12, opacity: 0.25 }).addTo(layers);
+    L.polyline(main.pts, { color: baseGroup.color, weight: 6, opacity: 0.95, dashArray: main.street ? null : "8 8" }).addTo(layers)
+      .bindTooltip(`Shared route: ${baseMiles} mi${main.street ? `, ${main.turns} turns` : " (sketch)"}. Everyone runs this together.`);
+    routes.filter((r) => spurs.has(r.i)).forEach((r) => {
+      const s = spurs.get(r.i);
+      L.polyline(s.spur.pts, { color: r.color, weight: 5, opacity: 0.95, dashArray: s.spur.street ? null : "6 6" }).addTo(layers)
+        .bindTooltip(`Group ${r.group.id} add-on: ${(r.group.miles - baseMiles).toFixed(2).replace(/0$/, "")} mi out and back, then rejoin`);
+      const icon = L.divIcon({ className: "turn-flag split-flag", html: `<span style="background:${r.color}">${r.group.id}</span>`, iconSize: [22, 22], iconAnchor: [11, 11] });
+      L.marker(s.here, { icon, keyboard: false }).addTo(layers).bindTooltip(`Group ${r.group.id} splits off here and comes back here`);
+      if (s.spur.turnaround) {
+        const t = L.divIcon({ className: "turn-flag", html: `<span style="background:${r.color}">↺</span>`, iconSize: [22, 22], iconAnchor: [11, 11] });
+        L.marker(s.spur.turnaround, { icon: t, keyboard: false }).addTo(layers).bindTooltip(`Group ${r.group.id} turns back here`);
+      }
+    });
+    if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 15 });
+    if (onNote) onNote((routes.some((r) => !r.street) ? "Street routing couldn't be reached, so routes are sketched (dashed). " : "")
+      + "Run together: everyone starts as one pack on the shared route. Faster groups split off at their numbered flag "
+      + "for a short out-and-back and rejoin, so all groups finish together. "
+      + (idx ? "Routes avoid streets with more violent incidents in the last 12 months (Philadelphia police data)."
+             : (safetyGrid && safetyGrid.note) || ""));
+    return { layers, routes, together: true, baseMiles };
   }
 
   // ---------- replay: runners' dots move along their group's route (simulated, no real locations) ----------

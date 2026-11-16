@@ -86,7 +86,7 @@ def in_signature(club_id):
     c = db.club(club_id)
     key = json.dumps([[(r["runner_id"], r["pace"], r["miles"], r["guests"]) for r in rows],
                       c["target_mode"], c["target_value"], c["run_time"], c["start_lat"], c["start_lng"],
-                      c["end_lat"], c["end_lng"]])
+                      c["end_lat"], c["end_lng"], c.get("route_style")])
     return hashlib.sha1(key.encode()).hexdigest()
 
 

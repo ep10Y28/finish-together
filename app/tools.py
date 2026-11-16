@@ -141,10 +141,11 @@ def _target_info(club, minutes, note=None):
 
 
 def _route_info(club):
+    style = club.get("route_style") or "separate"
     if is_point_to_point(club):
-        return {"type": "point", "min_miles": min_miles(club),
+        return {"type": "point", "min_miles": min_miles(club), "style": style,
                 "end": {"name": club.get("end_name") or "Finish", "lat": club["end_lat"], "lng": club["end_lng"]}}
-    return {"type": "loop", "min_miles": 1.0, "end": None}
+    return {"type": "loop", "min_miles": 1.0, "end": None, "style": style}
 
 
 def build_routes(groups, club):

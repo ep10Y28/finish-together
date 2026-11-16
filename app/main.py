@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agents, config, crime, db, safety, scout, tools
+from . import agents, config, crime, db, runs, safety, scout, tools
 
 app = FastAPI(title="Finish Together")
 
@@ -31,18 +31,9 @@ HHMM = r"([01]\d|2[0-3]):[0-5]\d"
 def open_evening(club_id):
     """Fresh evening for one club: clear tonight's data, load the opening check-ins, post the first plan."""
     club = db.club(club_id)
-    db.reset_run(club_id)
-    for rid, status, guests in SEED_BY_SLUG.get(club["slug"], {}).get("opening", []):
-        if db.is_member(club_id, rid):
-            db.upsert_checkin(club_id, rid, status, guests=guests)
-    db.add_message(club_id, agents.DIRECTOR,
-                   f"Tonight's run: {tools.clock(0, club['run_time'])} from {club['start_name']}, "
-                   f"{agents.describe_target(club)}. Tell me if you're in, how far and how fast, "
-                   "and I'll make sure every group finishes at the same time.", "plan")
-    agents._last_signature.pop(club_id, None)
-    state = {"groups": [], "plan": None, "verified": False, "posted": False}
-    agents.rule_director(club_id, state, "Opening plan")
-    agents._last_signature[club_id] = agents.in_signature(club_id)
+    opening = [(rid, status, guests, None, None) for rid, status, guests in SEED_BY_SLUG.get(club["slug"], {}).get("opening", [])
+               if db.is_member(club_id, rid)]
+    runs.open_run(club_id, opening, runs.current(club))
 
 
 def seed():
@@ -53,6 +44,7 @@ def seed():
         for rid, note in c.get("pending", []):
             db.set_membership(cid, rid, "member", "pending", note)
         open_evening(cid)
+        runs.seed_history(db.club(cid))
 
 
 @app.on_event("startup")
@@ -60,6 +52,11 @@ def startup():
     db.init()
     if not db.clubs():
         seed()
+    elif db.past_run_count() == 0:          # a database from before the run log: add the demo history once
+        for c in SEED:
+            club = db.club(c["slug"])
+            if club:
+                runs.seed_history(club)
     scout.start_timer()
 
 
@@ -133,6 +130,8 @@ def club_view(club, user):
     out["me"] = {"status": mine["status"] if mine else None, "role": mine["role"] if mine else None,
                  "is_member": is_member, "is_captain": is_cap}
     out["member_list"] = db.members(club["id"]) if is_member else []
+    out["run_date"] = runs.current(club)
+    out["run_label"] = runs.label(out["run_date"])
     out["pending"] = db.members(club["id"], "pending") if is_cap else []
     return out
 
@@ -192,6 +191,7 @@ class ClubFields(BaseModel):
     target_mode: str | None = None         # "time" or "distance"
     target_value: float | None = None
     schedule: list[dict] | None = None
+    route_style: str | None = None         # "separate" or "together"
 
 
 def _point(lat, lng, what):
@@ -235,6 +235,11 @@ def clean_settings(fields, club=None):
         if not re.fullmatch(HHMM, fields["run_time"]):
             raise HTTPException(400, "Start time should look like 18:30.")
         out["run_time"] = fields["run_time"]
+    style = fields.get("route_style")
+    if style is not None:
+        if style not in ("separate", "together"):
+            raise HTTPException(400, "Choose separate routes or run together.")
+        out["route_style"] = style
     mode = fields.get("target_mode")
     if mode is not None and mode not in ("time", "distance"):
         raise HTTPException(400, "Choose distance or time.")
@@ -265,12 +270,14 @@ def list_clubs(x_user_id: str | None = Header(None)):
     mine = {m["club_id"]: m for m in (db.my_memberships(u["id"]) if u else [])}
     out = []
     for c in db.clubs():
+        run_date = runs.current(c)              # moves a club on to its next run once the date has passed
         plan = db.latest_plan(c["id"])
         m = mine.get(c["id"])
         out.append({**describe(c),
                     "tonight": {"groups": len(plan["groups"]) if plan else 0,
                                 "going": sum(g["headcount"] for g in plan["groups"]) if plan else 0,
-                                "back_at": plan.get("back_at") if plan else None},
+                                "back_at": plan.get("back_at") if plan else None,
+                                "label": runs.label(run_date)},
                     "my_status": m["status"] if m else None, "my_role": m["role"] if m else None})
     return {"clubs": out}
 
@@ -383,6 +390,7 @@ def update_club(slug: str, body: ClubFields, x_user_id: str | None = Header(None
         return {"club": club_view(c, u)}
     db.update_club(c["id"], fields)
     new = db.club(c["id"])
+    fields = {k: v for k, v in fields.items() if c.get(k) != v}     # only announce what actually changed
     what = []
     if "start_lat" in fields or "start_name" in fields:
         what.append(f"meeting point is {new['start_name']}")
@@ -393,8 +401,14 @@ def update_club(slug: str, body: ClubFields, x_user_id: str | None = Header(None
         what.append(f"the run is {agents.describe_target(new)}")
     if "run_time" in fields:
         what.append(f"start time is {tools.clock(0, new['run_time'])}")
+    if "route_style" in fields and fields["route_style"] != (c.get("route_style") or "separate"):
+        what.append("groups start together on one shared route and faster groups add a short out-and-back"
+                    if fields["route_style"] == "together" else "each group gets its own route again")
+    if "run_day" in fields and fields["run_day"] != c["run_day"]:
+        db.set_run_date(c["id"], runs.next_regular(new, runs.today()))
+        what.append(f"the run is on {new['run_day']}s, next on {runs.label(db.run_date(c['id']))}")
     if what:
-        db.add_message(c["id"], agents.DIRECTOR, f"{u['name'].split()[0]} changed tonight's run: "
+        db.add_message(c["id"], agents.DIRECTOR, f"{u['name'].split()[0]} changed the next run: "
                        + "; ".join(what) + ". Updating the plan.", "plan")
         agents.start_director(c["id"], f"Captain changed the run ({'; '.join(what)})")
     return {"club": club_view(new, u)}
@@ -407,8 +421,10 @@ def state(slug: str, after_msg: int = 0, after_event: int = 0, x_user_id: str | 
     c = need_club(slug)
     u = me(x_user_id)
     member = bool(u and db.is_member(c["id"], u["id"]))
+    run_date = runs.current(c)
     checkins = db.checkins(c["id"])
     return {
+        "run_date": run_date, "run_label": runs.label(run_date),
         "mode": config.MODE,
         "model": config.PORTKEY_MODEL if config.MODE == "portkey" else config.OPENAI_MODEL,
         "member": member,
@@ -518,6 +534,111 @@ def reset(slug: str, x_user_id: str | None = Header(None)):
     need_captain(c, u)
     open_evening(c["id"])
     return {"ok": True}
+
+
+# ----------------------------------------------------------------- calendar, sign-ups ahead, past runs
+
+@app.get("/api/clubs/{slug}/runs")
+def club_runs(slug: str, x_user_id: str | None = Header(None)):
+    c, u = need_club(slug), me(x_user_id)
+    member = bool(u and db.is_member(c["id"], u["id"]))
+    cal = runs.calendar(c, u["id"] if u else None, member)
+    return {**cal, "past": db.past_runs(c["id"]), "member": member,
+            "captain": bool(u and db.is_captain(c["id"], u["id"]))}
+
+
+@app.get("/api/clubs/{slug}/runs/{run_id}")
+def past_run(slug: str, run_id: int, x_user_id: str | None = Header(None)):
+    c, u = need_club(slug), me(x_user_id)
+    r = db.past_run(c["id"], run_id)
+    if not r:
+        raise HTTPException(404, "No such run.")
+    r["plan"] = public_plan(r["plan"], bool(u and db.is_member(c["id"], u["id"])))
+    return {"run": r}
+
+
+def need_calendar_date(c, date):
+    if date not in {d["date"] for d in runs.calendar(c)["dates"]}:
+        raise HTTPException(400, "That date isn't on the club's calendar.")
+
+
+@app.get("/api/clubs/{slug}/calendar/{date}")
+def calendar_day(slug: str, date: str, x_user_id: str | None = Header(None)):
+    c, u = need_club(slug), me(x_user_id)
+    need_calendar_date(c, date)
+    member = bool(u and db.is_member(c["id"], u["id"]))
+    people = runs.who(c, date)
+    day = next(d for d in runs.calendar(c, u["id"] if u else None)["dates"] if d["date"] == date)
+    return {"day": day, "people": people if member else [], "member": member}
+
+
+class SignUpAhead(BaseModel):
+    status: str
+    miles: float | None = None
+    pace: str | None = None
+    guests: int = 0
+
+
+@app.post("/api/clubs/{slug}/calendar/{date}/signup")
+def sign_up_ahead(slug: str, date: str, body: SignUpAhead, x_user_id: str | None = Header(None)):
+    u, c = need_me(x_user_id), need_club(slug)
+    need_member(c, u)
+    need_calendar_date(c, date)
+    if date == runs.current(c):          # the next run uses the normal check-in, so the agents re-plan
+        return checkin(slug, CheckIn(**body.model_dump()), x_user_id)
+    if date in db.cancelled(c["id"]):
+        raise HTTPException(400, "That run is cancelled.")
+    if body.status not in ("in", "maybe", "out"):
+        raise HTTPException(400, "Status must be in, maybe or out.")
+    try:
+        pace = agents.parse_pace(body.pace)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Pace should look like 9:30.")
+    if body.miles is not None and not 1 <= body.miles <= 20:
+        raise HTTPException(400, "Distance is 1 to 20 miles.")
+    db.upsert_signup(c["id"], date, u["id"], body.status, body.miles, pace, max(0, min(body.guests, 4)))
+    return {"ok": True}
+
+
+class DayAction(BaseModel):
+    action: str
+    note: str = ""
+
+
+@app.post("/api/clubs/{slug}/calendar/{date}")
+def change_day(slug: str, date: str, body: DayAction, x_user_id: str | None = Header(None)):
+    u, c = need_me(x_user_id), need_club(slug)
+    need_captain(c, u)
+    need_calendar_date(c, date)
+    note = screen("Note", body.note, 120, c["id"])
+    cur = runs.current(c)
+    if body.action == "cancel":
+        db.set_cancelled(c["id"], date, True, note)
+        if date == cur:                  # the next run is off: move tonight's page to the following date
+            new = runs.advance(c, log=False)
+            db.add_message(c["id"], agents.DIRECTOR,
+                           f"{u['name'].split()[0]} cancelled the run on {runs.label(date)}"
+                           + (f" ({note})" if note else "") + f". Next run: {runs.label(new)}.", "plan")
+    elif body.action == "restore":
+        if date < cur:
+            raise HTTPException(400, "Check-ins have already moved on to a later run.")
+        db.set_cancelled(c["id"], date, False)
+    else:
+        raise HTTPException(400, "Unknown action.")
+    return club_runs(slug, x_user_id)
+
+
+@app.post("/api/clubs/{slug}/finish")
+def finish_run(slug: str, x_user_id: str | None = Header(None)):
+    """Captain: save the current run to the club's history now and open the next date."""
+    u, c = need_me(x_user_id), need_club(slug)
+    need_captain(c, u)
+    if agents.director_lock(c["id"]).locked():
+        raise HTTPException(409, "The Run Director is still planning. Try again in a moment.")
+    old = runs.current(c)
+    has_plan = bool((db.latest_plan(c["id"]) or {}).get("groups"))
+    new = runs.advance(c, log=True)
+    return {"logged": has_plan, "date": old, "next": new, "next_label": runs.label(new)}
 
 
 # ----------------------------------------------------------------- street safety data for routes

@@ -193,7 +193,8 @@ p { margin: 0 0 10px; }
 .club-body.tab-chat .p-chat,
 .club-body.tab-agents .p-agents,
 .club-body.tab-club .p-club,
-.club-body.tab-feedback .p-feedback { display: block; }
+.club-body.tab-feedback .p-feedback,
+.club-body.tab-runs .p-runs { display: block; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 14px 0 8px; }
 .panel-head h2 { margin: 0; }
 
@@ -202,18 +203,18 @@ p { margin: 0 0 10px; }
   .tabs { top: 65px; }
   .tab { flex: none; padding: 0 22px; }
   .mobile-only { display: none; }
-  .club-body:not(.tab-club):not(.tab-feedback) { display: grid; grid-template-columns: 330px minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
-  .club-body:not(.tab-club):not(.tab-feedback) .p-plan { display: block; grid-column: 2; grid-row: 1; }
-  .club-body:not(.tab-club):not(.tab-feedback) .p-chat,
-  .club-body:not(.tab-club):not(.tab-feedback) .p-agents {
+  .club-body:not(.tab-club):not(.tab-feedback):not(.tab-runs) { display: grid; grid-template-columns: 330px minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+  .club-body:not(.tab-club):not(.tab-feedback):not(.tab-runs) .p-plan { display: block; grid-column: 2; grid-row: 1; }
+  .club-body:not(.tab-club):not(.tab-feedback):not(.tab-runs) .p-chat,
+  .club-body:not(.tab-club):not(.tab-feedback):not(.tab-runs) .p-agents {
     position: sticky; top: 124px; max-height: calc(100vh - 140px); display: flex; flex-direction: column;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 14px 14px; box-shadow: var(--shadow);
     grid-row: 1;
   }
-  .club-body:not(.tab-club):not(.tab-feedback) .p-chat { grid-column: 1; }
-  .club-body:not(.tab-club):not(.tab-feedback) .p-agents { grid-column: 3; }
+  .club-body:not(.tab-club):not(.tab-feedback):not(.tab-runs) .p-chat { grid-column: 1; }
+  .club-body:not(.tab-club):not(.tab-feedback):not(.tab-runs) .p-agents { grid-column: 3; }
   .p-chat .messages, .p-agents .events { flex: 1; max-height: none; min-height: 0; }
-  .p-club, .p-feedback { max-width: 760px; margin: 0 auto; }
+  .p-club, .p-feedback, .p-runs { max-width: 760px; margin: 0 auto; }
 }
 
 /* ---------- plan ---------- */
@@ -468,3 +469,32 @@ button.member { width: 100%; text-align: left; font: inherit; color: inherit; ba
 .btn.danger { background: #c0392b; color: #fff; border-color: transparent; }
 .btn.danger-outline { color: #c0392b; border-color: #c0392b; background: transparent; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Calendar and past runs */
+.pill.out { background: color-mix(in srgb, #888 16%, transparent); color: var(--muted); border-color: transparent; }
+.p-runs .card { margin-bottom: 14px; }
+.cal-head, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-head span { text-align: center; font-size: 12px; color: var(--muted); padding: 4px 0; }
+.cal-cell { min-height: 46px; border-radius: 10px; padding: 4px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  font: inherit; color: var(--ink); background: transparent; border: 1px solid transparent; }
+.cal-cell.past { opacity: .4; }
+.cal-num { font-size: 12px; white-space: nowrap; }
+.cal-cell.run { cursor: pointer; border-color: var(--line); background: color-mix(in srgb, var(--club) 8%, transparent); }
+.cal-cell.run.next { border-color: var(--club); background: color-mix(in srgb, var(--club) 18%, transparent); font-weight: 600; }
+.cal-cell.run.cancelled { background: transparent; text-decoration: line-through; color: var(--muted); }
+.cal-dot { font-size: 12px; min-width: 20px; padding: 0 4px; border-radius: 999px; text-align: center; }
+.cal-cell.run .cal-dot:not(:empty) { background: var(--club); color: #fff; }
+.cal-cell.run.cancelled .cal-dot { background: transparent; color: var(--muted); }
+.cal-cell.run.mine .cal-dot { background: var(--in); }
+.run-list { display: grid; gap: 6px; margin-top: 12px; }
+.run-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; cursor: pointer; min-height: 44px; }
+.run-row .pill { margin-left: 6px; }
+.run-row.cancelled strong { text-decoration: line-through; color: var(--muted); }
+.day-sheet h3, .past-sheet h3 { margin: 16px 0 6px; }
+.day-sheet .btn.block { margin-top: 8px; }
+.day-sheet .confirm { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.past-map { height: 240px; border-radius: 12px; margin: 8px 0 4px; }
+.past-group { padding: 8px 0; border-top: 1px solid var(--line); }
+.past-group-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; flex-wrap: wrap; }
+.group-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }

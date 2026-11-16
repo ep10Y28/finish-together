@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS clubs (
   color TEXT, start_name TEXT, start_lat REAL, start_lng REAL,
   end_name TEXT, end_lat REAL, end_lng REAL,          -- all NULL means the run is a loop
   run_day TEXT, run_time TEXT,
-  target_mode TEXT, target_value REAL, schedule_json TEXT, script_json TEXT, created_at REAL
+  target_mode TEXT, target_value REAL, schedule_json TEXT, script_json TEXT, created_at REAL,
+  route_style TEXT DEFAULT 'separate'      -- 'separate': each group its own route; 'together': shared route plus add-ons
 );
 CREATE TABLE IF NOT EXISTS memberships (
   club_id INTEGER, runner_id INTEGER, role TEXT, status TEXT, note TEXT, updated_at REAL,
@@ -54,6 +55,21 @@ CREATE TABLE IF NOT EXISTS proposals (
 );
 CREATE TABLE IF NOT EXISTS client_errors (
   id INTEGER PRIMARY KEY AUTOINCREMENT, page TEXT, message TEXT, created_at REAL
+);
+CREATE TABLE IF NOT EXISTS run_state (
+  club_id INTEGER PRIMARY KEY, run_date TEXT          -- the date the current check-ins and plan are for
+);
+CREATE TABLE IF NOT EXISTS past_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, club_id INTEGER, run_date TEXT, run_time TEXT,
+  summary_json TEXT, plan_json TEXT, created_at REAL
+);
+CREATE TABLE IF NOT EXISTS signups (
+  club_id INTEGER, run_date TEXT, runner_id INTEGER, status TEXT, miles REAL, pace REAL,
+  guests INTEGER DEFAULT 0, updated_at REAL,
+  PRIMARY KEY (club_id, run_date, runner_id)
+);
+CREATE TABLE IF NOT EXISTS cancelled_runs (
+  club_id INTEGER, run_date TEXT, note TEXT, PRIMARY KEY (club_id, run_date)
 );
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, club_id INTEGER, agent TEXT, kind TEXT, detail TEXT,
@@ -95,6 +111,8 @@ def init(reset: bool = False):
         config.DB_PATH.unlink()
     with conn() as c:
         c.executescript(SCHEMA)
+        if "route_style" not in [r[1] for r in c.execute("PRAGMA table_info(clubs)")]:   # databases made before this option
+            c.execute("ALTER TABLE clubs ADD COLUMN route_style TEXT DEFAULT 'separate'")
         empty = c.execute("SELECT COUNT(*) FROM runners").fetchone()[0] == 0
         if empty:
             runners = json.loads((config.DATA_DIR / "runners.json").read_text())
@@ -177,7 +195,7 @@ def clubs():
 
 CLUB_FIELDS = {"name", "city", "blurb", "start_name", "start_lat", "start_lng", "end_name", "end_lat",
                "end_lng", "run_day", "run_time",
-               "target_mode", "target_value", "schedule"}
+               "target_mode", "target_value", "schedule", "route_style"}
 
 
 def update_club(club_id, fields):
@@ -238,6 +256,7 @@ def remove_member(club_id, runner_id):
     run("UPDATE memberships SET status='removed', role='member', updated_at=? WHERE club_id=? AND runner_id=?",
         (time.time(), club_id, runner_id))
     run("DELETE FROM checkins WHERE club_id=? AND runner_id=?", (club_id, runner_id))
+    run("DELETE FROM signups WHERE club_id=? AND runner_id=?", (club_id, runner_id))
     return bool(had and had[0]["status"] in ("in", "maybe"))
 
 
@@ -393,3 +412,72 @@ def scout_tokens_today():
     r = rows("SELECT COALESCE(SUM(tokens_in),0)+COALESCE(SUM(tokens_out),0) AS n FROM events "
              "WHERE club_id IS NULL AND agent='Improvement Scout' AND created_at > ?", (start,))
     return int(r[0]["n"])
+
+
+# ---------- the run calendar and the past-run log ----------
+
+def run_date(club_id):
+    r = rows("SELECT run_date FROM run_state WHERE club_id=?", (club_id,))
+    return r[0]["run_date"] if r else None
+
+
+def set_run_date(club_id, date):
+    run("INSERT INTO run_state (club_id,run_date) VALUES (?,?) ON CONFLICT(club_id) DO UPDATE SET run_date=excluded.run_date",
+        (club_id, date))
+
+
+def add_past_run(club_id, date, run_time, summary, plan, created_at=None):
+    return run("INSERT INTO past_runs (club_id,run_date,run_time,summary_json,plan_json,created_at) VALUES (?,?,?,?,?,?)",
+               (club_id, date, run_time, json.dumps(summary), json.dumps(plan), created_at or time.time()))
+
+
+def past_runs(club_id):
+    out = []
+    for r in rows("SELECT id,run_date,run_time,summary_json FROM past_runs WHERE club_id=? ORDER BY run_date DESC, id DESC",
+                  (club_id,)):
+        out.append({"id": r["id"], "date": r["run_date"], "run_time": r["run_time"], **json.loads(r["summary_json"])})
+    return out
+
+
+def past_run(club_id, run_id):
+    r = rows("SELECT * FROM past_runs WHERE club_id=? AND id=?", (club_id, run_id))
+    if not r:
+        return None
+    r = r[0]
+    return {"id": r["id"], "date": r["run_date"], "run_time": r["run_time"], **json.loads(r["summary_json"]),
+            "plan": json.loads(r["plan_json"])}
+
+
+def past_run_count():
+    return rows("SELECT COUNT(*) AS n FROM past_runs")[0]["n"]
+
+
+def upsert_signup(club_id, date, runner_id, status, miles=None, pace=None, guests=0):
+    base = runner(runner_id)
+    run("""INSERT INTO signups (club_id,run_date,runner_id,status,miles,pace,guests,updated_at) VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT(club_id,run_date,runner_id) DO UPDATE SET status=excluded.status, miles=excluded.miles,
+             pace=excluded.pace, guests=excluded.guests, updated_at=excluded.updated_at""",
+        (club_id, date, runner_id, status, float(miles or base["usual_miles"]), float(pace or base["pace"]),
+         int(guests or 0), time.time()))
+
+
+def signups(club_id, date=None):
+    if date:
+        return rows("""SELECT s.*, r.name, r.color FROM signups s JOIN runners r ON r.id=s.runner_id
+                       WHERE s.club_id=? AND s.run_date=? ORDER BY s.pace""", (club_id, date))
+    return rows("SELECT * FROM signups WHERE club_id=?", (club_id,))
+
+
+def drop_signups(club_id, date):
+    run("DELETE FROM signups WHERE club_id=? AND run_date=?", (club_id, date))
+
+
+def cancelled(club_id):
+    return {r["run_date"]: r["note"] for r in rows("SELECT * FROM cancelled_runs WHERE club_id=?", (club_id,))}
+
+
+def set_cancelled(club_id, date, on, note=""):
+    if on:
+        run("INSERT OR REPLACE INTO cancelled_runs (club_id,run_date,note) VALUES (?,?,?)", (club_id, date, note))
+    else:
+        run("DELETE FROM cancelled_runs WHERE club_id=? AND run_date=?", (club_id, date))

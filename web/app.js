@@ -204,7 +204,7 @@ function clubCard(c) {
     h("div", { class: "small muted" }, c.target_label),
     h("div", { class: "club-card-foot small" },
       h("span", {}, `${c.members} members`),
-      h("span", {}, c.tonight.groups ? `${c.tonight.going} going · ${c.tonight.groups} groups · finish ${c.tonight.back_at}` : "No plan yet")));
+      h("span", {}, `${c.tonight.label}: ` + (c.tonight.groups ? `${c.tonight.going} going · ${c.tonight.groups} groups · finish ${c.tonight.back_at}` : "no plan yet"))));
 }
 
 // ---------------------------------------------------------------- place suggestions
@@ -360,7 +360,7 @@ function targetPicker(mode, value) {
   };
   input.value = value;
   sync();
-  return { node: h("div", { class: "target" }, h("div", { class: "label" }, "Tonight's run"), seg, h("div", { class: "with-unit" }, input, unit), hint),
+  return { node: h("div", { class: "target" }, h("div", { class: "label" }, "Distance or time"), seg, h("div", { class: "with-unit" }, input, unit), hint),
            value: () => ({ target_mode: st.mode, target_value: +input.value }) };
 }
 
@@ -472,11 +472,28 @@ async function adminPage() {
   load();
 }
 
+// Route style: separate routes (default) or run together (one shared route, faster groups add out-and-backs).
+function stylePicker(value) {
+  let v = value;
+  const seg = h("div", { class: "seg" });
+  const hint = h("div", { class: "small muted" });
+  const paint = () => {
+    seg.replaceChildren(...[["separate", "Separate routes"], ["together", "Run together"]].map(([k, label]) =>
+      h("button", { type: "button", class: v === k ? "on" : "", "aria-pressed": v === k ? "true" : "false", onclick: () => { v = k; paint(); } }, label)));
+    hint.textContent = v === "together"
+      ? "Everyone starts as one pack on a shared route. Faster groups split off at a numbered flag for a short out-and-back and rejoin, so all groups finish together."
+      : "Each group runs the same simple shape and turns around at its own flag.";
+  };
+  paint();
+  return { node: h("div", { class: "target" }, h("div", { class: "label" }, "Route style"), seg, hint), value: () => v };
+}
+
 // ---------------------------------------------------------------- page: one club
 function clubPage(slug, tab) {
   const view = $("view");
   let club = null, lastMsg = 0, lastEvent = 0, planKey = null, drawn = null, playing = null, latest = null, alive = true;
   let planMap = null, settingsMap = null, editMap = null, drawSeq = 0;
+  let runDate = null;
 
   const head = h("section", { class: "club-head" }, h("div", { class: "muted" }, "Loading…"));
   const tabs = h("nav", { class: "tabs", role: "tablist", "aria-label": "Club sections" });
@@ -492,7 +509,7 @@ function clubPage(slug, tab) {
   const mapNote = h("div", { class: "small muted grow" });
   const replayClock = h("span", { class: "replay-clock", hidden: true });
   const replayBtn = h("button", { class: "btn", onclick: () => startReplay() }, "▶ Watch the run");
-  const editBtn = h("button", { class: "btn", hidden: true, onclick: () => openEditor() }, "Edit tonight's run");
+  const editBtn = h("button", { class: "btn", hidden: true, onclick: () => openEditor() }, "Edit next run");
   const mapWrap = h("div", { class: "map-wrap" }, mapBox, replayClock);
   const mapBar = h("div", { class: "map-bar" }, replayBtn, editBtn, mapNote);
   const editor = h("div", { class: "card route-editor", hidden: true });
@@ -549,7 +566,7 @@ function clubPage(slug, tab) {
     } }, "Play the evening"),
     h("button", { class: "btn", onclick: () => api(`/api/clubs/${slug}/replan`, { method: "POST" }).catch((e) => toast(e.message)) }, "Re-plan"),
     h("button", { class: "btn", onclick: async () => {
-      try { await api(`/api/clubs/${slug}/reset`, { method: "POST" }); lastMsg = lastEvent = 0; planKey = null; messages.replaceChildren(); events.replaceChildren(); poll(); }
+      try { await api(`/api/clubs/${slug}/reset`, { method: "POST" }); resetLive(); }
       catch (e) { toast(e.message); }
     } }, "Reset"));
   const agentsLocked = h("div", { class: "locked", hidden: true }, "The agent trace is visible to members.");
@@ -557,15 +574,16 @@ function clubPage(slug, tab) {
     h("div", { class: "panel-head" }, h("h2", {}, "Agents at work"), h("span", { class: "muted small" }, "live trace")),
     capControls,
     h("div", { class: "meter" },
-      h("div", { class: "meter-row" }, h("div", {}, tok.total, h("label", {}, "tokens")), h("div", {}, tok.cost, h("label", {}, "cost tonight"))),
+      h("div", { class: "meter-row" }, h("div", {}, tok.total, h("label", {}, "tokens")), h("div", {}, tok.cost, h("label", {}, "cost this run"))),
       h("div", { class: "bar" }, budgetFill), budgetLabel, byAgent),
     agentsLocked, events);
 
   // Club panel
   const pClub = h("section", { class: "panel p-club" });
   const pFeedback = h("section", { class: "panel p-feedback" });
+  const pRuns = h("section", { class: "panel p-runs" });
 
-  body.append(pChat, pPlan, pAgents, pClub, pFeedback);
+  body.append(pChat, pPlan, pAgents, pClub, pFeedback, pRuns);
   view.replaceChildren(h("div", { class: "club-page" }, head, tabs, body));
 
   function drawTabs() {
@@ -577,10 +595,11 @@ function clubPage(slug, tab) {
         setTimeout(() => { if (planMap) planMap.invalidateSize(); if (settingsMap) settingsMap.invalidateSize(); }, 60);
         if (id === "chat") messages.scrollTop = messages.scrollHeight;
         if (id === "feedback") drawFeedback();
+        if (id === "runs") drawRuns();
       } }, label);
     const n = club && club.pending ? club.pending.length : 0;
-    tabs.replaceChildren(t("plan", "Tonight"), t("chat", "Chat", "mobile-only"), t("agents", "Agents", "mobile-only"),
-      t("club", n ? `Club (${n})` : "Club"), t("feedback", "Feedback"));
+    tabs.replaceChildren(t("plan", "Next run"), t("chat", "Chat", "mobile-only"), t("agents", "Agents", "mobile-only"),
+      t("runs", "Calendar"), t("club", n ? `Club (${n})` : "Club"), t("feedback", "Feedback"));
   }
 
   // ------------- header and club tab
@@ -599,7 +618,7 @@ function clubPage(slug, tab) {
         h("div", { class: "grow" }, h("h1", {}, club.name), h("div", { class: "muted small" }, `${club.city} · captain ${club.captain || "?"} · ${club.members} members`)),
         action),
       h("div", { class: "chips" },
-        h("span", { class: "chip" }, `${club.run_day}s ${club.start_clock}`),
+        h("span", { class: "chip" }, `Next run: ${club.run_label}, ${club.start_clock}`),
         h("span", { class: "chip" }, `Start: ${club.start_name}`),
         h("span", { class: "chip" }, club.route_type === "point" ? `Finish: ${club.finish_name}` : "Loop back to start"),
         h("span", { class: "chip" }, club.target_mode === "distance" ? `${club.target_value} mi, middle group` : `${club.target_value} min`)));
@@ -609,6 +628,7 @@ function clubPage(slug, tab) {
     drawTabs();
     drawClubTab();
     if (tab === "feedback") drawFeedback();
+    if (tab === "runs") drawRuns();
   }
 
   // ------------- runner feedback: a post-run rating and a comment; the Improvement Scout reads these
@@ -658,6 +678,151 @@ function clubPage(slug, tab) {
       h("div", { class: "card" }, h("h2", {}, "What's changing"),
         data.changing.length ? h("ul", { class: "changing" }, data.changing.map((c) => h("li", {}, c.title)))
           : h("p", { class: "muted small" }, "Approved fixes show up here.")));
+  }
+
+  // ------------- calendar of coming runs (sign up ahead) and the log of past runs
+  let runsData = null;
+  async function drawRuns() {
+    if (!club) return;
+    try { runsData = await api(`/api/clubs/${slug}/runs`); } catch (e) { pRuns.replaceChildren(h("div", { class: "empty" }, e.message)); return; }
+    const d = runsData;
+    const byDate = Object.fromEntries(d.dates.map((x) => [x.date, x]));
+    // Month grid from this week to the last date on the calendar
+    const iso = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    const now = new Date(); now.setHours(12, 0, 0, 0);
+    const start = new Date(now); start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const last = new Date(d.dates[d.dates.length - 1].date + "T12:00:00");
+    const cells = [];
+    for (const x = new Date(start); x <= last || cells.length % 7; x.setDate(x.getDate() + 1)) {
+      const key = iso(x), run = byDate[key], past = x < now && key !== iso(now);
+      const day = x.getDate() === 1 || cells.length === 0 ? x.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : String(x.getDate());
+      if (!run) { cells.push(h("div", { class: `cal-cell${past ? " past" : ""}` }, h("span", { class: "cal-num" }, day))); continue; }
+      const mineIn = run.mine && run.mine.status !== "out";
+      cells.push(h("button", { type: "button", class: `cal-cell run ${run.state}${mineIn ? " mine" : ""}`, "aria-label": `${run.label}: ${run.state === "cancelled" ? "cancelled" : `${run.going} going`}`,
+        onclick: () => daySheet(run.date) },
+        h("span", { class: "cal-num" }, day),
+        h("span", { class: "cal-dot" }, run.state === "cancelled" ? "off" : mineIn ? "✓" : run.going ? String(run.going) : "")));
+    }
+    const status = (run) => run.state === "cancelled" ? h("span", { class: "pill out" }, "Cancelled")
+      : run.mine ? h("span", { class: `pill ${run.mine.status}` }, run.mine.status === "in" ? "You're in" : run.mine.status === "maybe" ? "Maybe" : "You're out")
+      : null;
+    const list = d.dates.map((run) => h("button", { type: "button", class: `run-row ${run.state}`, onclick: () => daySheet(run.date) },
+      h("div", { class: "grow" },
+        h("div", {}, h("strong", {}, run.label), " ", h("span", { class: "muted small" }, run.time), run.state === "next" ? h("span", { class: "pill cap" }, "Next run") : null),
+        h("div", { class: "muted small" }, run.state === "cancelled" ? (run.note || "No run this week") : `${run.going} going${run.maybe ? ` · ${run.maybe} maybe` : ""}`)),
+      status(run), h("span", { class: "muted" }, "›")));
+    const past = d.past.map((r) => h("button", { type: "button", class: "run-row", onclick: () => pastSheet(r.id) },
+      h("div", { class: "grow" },
+        h("div", {}, h("strong", {}, r.label), " ", h("span", { class: "muted small" }, clockAt(r.run_time, 0))),
+        h("div", { class: "muted small" }, r.groups ? `${r.going} ran · ${r.groups} groups · back by ${r.back_at}, ${r.spread} min apart` : "No plan was made")),
+      h("span", { class: "muted" }, "›")));
+    pRuns.replaceChildren(
+      h("div", { class: "card" },
+        h("div", { class: "panel-head" }, h("h2", {}, "Coming up"), h("span", { class: "muted small" }, `${club.run_day}s at ${club.start_clock}`)),
+        h("p", { class: "muted small" }, d.member ? "Tap a date to see who's going and sign up ahead. Your sign-up becomes your check-in when that date is the next run."
+          : "Tap a date to see how many are going. Join the club to sign up."),
+        h("div", { class: "cal-head" }, ...["M", "T", "W", "T", "F", "S", "S"].map((x) => h("span", {}, x))),
+        h("div", { class: "cal-grid" }, cells),
+        h("div", { class: "run-list" }, list)),
+      h("div", { class: "card" },
+        h("div", { class: "panel-head" }, h("h2", {}, "Past runs"), h("span", { class: "muted small" }, `${d.past.length} logged`)),
+        h("p", { class: "muted small" }, "Each run is saved after its date passes: who ran, at what pace, the groups and the routes."),
+        past.length ? h("div", { class: "run-list" }, past) : h("p", { class: "muted" }, "No runs logged yet.")));
+  }
+
+  async function daySheet(date) {
+    let data;
+    try { data = await api(`/api/clubs/${slug}/calendar/${date}`); } catch (e) { toast(e.message); return; }
+    const day = data.day, isNext = day.state === "next";
+    const parts = [
+      h("div", { class: "chips" },
+        h("span", { class: "chip" }, day.time),
+        h("span", { class: "chip" }, `Start: ${club.start_name}`),
+        h("span", { class: "chip" }, club.route_type === "point" ? `Finish: ${club.finish_name}` : "Loop back to start")),
+      day.state === "cancelled"
+        ? h("p", {}, h("strong", {}, "This run is cancelled."), day.note ? ` ${day.note}` : "")
+        : h("p", { class: "muted small" }, `${day.going} going${day.maybe ? `, ${day.maybe} maybe` : ""}.${isNext ? " This is the next run, so check-ins go straight to the plan." : ""}`),
+    ];
+    if (data.member && day.state !== "cancelled") {
+      parts.push(h("button", { class: "btn primary block", onclick: () => {
+        closeSheet();
+        if (isNext) checkinSheet(); else checkinSheet({ date, label: day.label, mine: day.mine });
+      } }, day.mine ? (isNext ? "Change my check-in" : "Change my sign-up") : (isNext ? "Check in" : "Sign up")));
+    }
+    if (data.member) {
+      const going = data.people.filter((p) => p.status !== "out");
+      parts.push(h("h3", {}, isNext ? "Checked in" : "Signed up"),
+        going.length ? h("div", { class: "member-list" }, going.map((p) => h("div", { class: "member" },
+          avatar(p.name, p.color), h("span", { class: "grow" }, p.name, p.guests ? h("span", { class: "muted small" }, ` +${p.guests}`) : null),
+          h("span", { class: "muted small" }, `${p.miles} mi at ${fmtPace(p.pace)}/mi`),
+          p.status === "maybe" ? h("span", { class: "pill maybe" }, "Maybe") : null)))
+          : h("p", { class: "muted" }, "No one yet."));
+    }
+    if (runsData && runsData.captain) {
+      const note = h("input", { maxlength: 120, placeholder: "Optional note, e.g. track closed for a race" });
+      const confirmBox = h("div", { class: "confirm", hidden: true },
+        h("p", {}, isNext ? `Cancel the run on ${day.label}? Check-ins move to the following run, and the chat starts fresh.` : `Cancel the run on ${day.label}?`),
+        h("label", {}, "Note for runners", note),
+        h("button", { class: "btn danger block", onclick: () => changeDay(date, "cancel", note.value) }, "Yes, cancel this run"));
+      const actions = [];
+      if (day.state === "cancelled") actions.push(h("button", { class: "btn block", onclick: () => changeDay(date, "restore") }, "Bring this run back"));
+      else {
+        if (isNext) {
+          const logBox = h("div", { class: "confirm", hidden: true },
+            h("p", {}, `Save ${day.label} to Past runs now and open the next run? Check-ins and the chat start fresh. Runs are also saved by themselves the day after.`),
+            h("button", { class: "btn primary block", onclick: () => finishRun() }, "Yes, log it"));
+          actions.push(h("button", { class: "btn block", onclick: () => (logBox.hidden = false) }, "Log this run now"), logBox);
+        }
+        actions.push(h("button", { class: "btn danger-outline block", onclick: () => (confirmBox.hidden = false) }, "Cancel this run"));
+      }
+      parts.push(h("h3", {}, "Captain"), ...actions, confirmBox);
+    }
+    openSheet(day.label, h("div", { class: "day-sheet" }, ...parts));
+  }
+
+  async function changeDay(date, action, note = "") {
+    try {
+      await api(`/api/clubs/${slug}/calendar/${date}`, { method: "POST", body: { action, note } });
+      closeSheet(); toast(action === "cancel" ? "Run cancelled." : "Run is back on the calendar.");
+      await loadClub(); drawRuns(); resetLive();
+    } catch (e) { toast(e.message); }
+  }
+
+  function resetLive() { lastMsg = lastEvent = 0; planKey = null; runDate = null; messages.replaceChildren(); events.replaceChildren(); poll(); }
+
+  async function finishRun() {
+    try {
+      const r = await api(`/api/clubs/${slug}/finish`, { method: "POST" });
+      closeSheet(); toast(r.logged ? `Saved to Past runs. Next run: ${r.next_label}.` : `No plan to save. Next run: ${r.next_label}.`);
+      await loadClub(); drawRuns(); resetLive();
+    } catch (e) { toast(e.message); }
+  }
+
+  let pastMap = null;
+  async function pastSheet(id) {
+    let r;
+    try { r = (await api(`/api/clubs/${slug}/runs/${id}`)).run; } catch (e) { toast(e.message); return; }
+    const box = h("div", { class: "map past-map" });
+    const note = h("div", { class: "small muted" });
+    const groups = (r.plan.groups || []).map((g) => h("div", { class: "past-group" },
+      h("div", { class: "past-group-head" }, h("span", { class: "group-dot", style: `background:${FT_MAP.groupColor(g.id - 1)}` }),
+        h("strong", {}, `Group ${g.id}`), h("span", { class: "muted small" }, ` ${g.pace_label} · ${g.miles} mi · back ${g.back_at}`)),
+      h("div", { class: "small" }, g.members.map((m) => m.id ? `${m.name} (${fmtPace(m.pace)}${m.guests ? `, +${m.guests}` : ""})` : null).filter(Boolean).join(", ")
+        || `${g.headcount} runners`)));
+    openSheet(`${r.label} run`, h("div", { class: "past-sheet" },
+      h("div", { class: "chips" },
+        h("span", { class: "chip" }, `${r.going} ran`), h("span", { class: "chip" }, `${r.groups} groups`),
+        r.back_at ? h("span", { class: "chip" }, `Back by ${r.back_at}`) : null,
+        r.spread != null ? h("span", { class: "chip" }, `${r.spread} min apart`) : null,
+        r.tokens ? h("span", { class: "chip" }, `${r.tokens.toLocaleString()} tokens`) : null),
+      h("p", { class: "muted small" }, `${r.start_name}${r.route_type === "point" ? ` to ${r.finish_name}` : ", loop"} · ${r.target_label}`),
+      box, note, ...groups));
+    if (pastMap) { pastMap.remove(); pastMap = null; }
+    if (!r.plan.start) return;
+    pastMap = FT_MAP.makeMap(box, [r.plan.start.lat, r.plan.start.lng], 14);
+    if (!pastMap) return;
+    setTimeout(() => pastMap && pastMap.invalidateSize(), 80);
+    try { await FT_MAP.drawPlan(pastMap, r.plan, (n) => (note.textContent = n)); } catch (e) { note.textContent = "The routes couldn't be drawn."; }
   }
 
   function joinSheet() {
@@ -724,22 +889,25 @@ function clubPage(slug, tab) {
     const picker = mapPicker(pick, (p) => { pick = p; });
     picker.classList.add("big-picker");
     const target = targetPicker(club.target_mode, club.target_value);
+    const style = stylePicker(club.route_style || "separate");
     setTimeout(() => (editMap = picker._map), 80);
     const save = h("button", { class: "btn primary", type: "submit" }, "Save and re-plan");
     editor.replaceChildren(h("form", { class: "form", onsubmit: async (e) => {
       e.preventDefault();
-      const body = { start_name: pick.startName || "Start", start_lat: pick.start[0], start_lng: pick.start[1], route_type: pick.routeType, ...target.value() };
+      const body = { start_name: pick.startName || "Start", start_lat: pick.start[0], start_lng: pick.start[1], route_type: pick.routeType,
+        route_style: style.value(), ...target.value() };
       if (pick.routeType === "point") Object.assign(body, { end_name: pick.endName || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
       save.disabled = true;
       try {
         await api(`/api/clubs/${slug}`, { method: "PATCH", body });
         closeEditor();
-        toast("Saved. The Run Director is updating tonight's plan.");
+        toast("Saved. The Run Director is updating the plan.");
         planKey = null; await loadClub(); poll();
       } catch (err) { save.disabled = false; toast(err.message); }
     } },
-      h("div", { class: "panel-head" }, h("h2", {}, "Tonight's run"), h("span", { class: "muted small" }, "Only you see this, as captain")),
+      h("div", { class: "panel-head" }, h("h2", {}, "Next run"), h("span", { class: "muted small" }, "Only you see this, as captain")),
       target.node,
+      style.node,
       picker,
       h("div", { class: "row2" }, h("button", { class: "btn", type: "button", onclick: closeEditor }, "Cancel"), save)));
     mapWrap.hidden = true; mapBar.hidden = true; editor.hidden = false;
@@ -762,7 +930,7 @@ function clubPage(slug, tab) {
     setTimeout(() => (settingsMap = picker._map), 80);
     const target = targetPicker(club.target_mode, club.target_value);
     return h("div", { class: "card" }, h("h2", {}, "Run settings"),
-      h("p", { class: "muted small" }, "Changes go to the Run Director, which re-plans tonight's groups and posts the update."),
+      h("p", { class: "muted small" }, "Changes go to the Run Director, which re-plans the next run's groups and posts the update."),
       h("form", { class: "form", onsubmit: async (e) => {
         e.preventDefault();
         const body = { start_name: pick.startName || "Start", start_lat: pick.start[0], start_lng: pick.start[1],
@@ -778,9 +946,9 @@ function clubPage(slug, tab) {
   }
 
   // ------------- check-in sheet: today's pace, distance, guests, and the pace board
-  function checkinSheet() {
+  function checkinSheet(ahead) {
     if (!club || !club.me.is_member) { toast("Join the club to check in."); return; }
-    const mine = latest && latest.my_checkin;
+    const mine = ahead ? ahead.mine : latest && latest.my_checkin;
     const st = {
       status: mine ? mine.status : "in",
       pace: mine ? mine.pace : ME.pace,
@@ -805,6 +973,12 @@ function clubPage(slug, tab) {
       paceOut.value = fmtPace(st.pace);
       milesOut.value = st.miles;
       guestsOut.textContent = st.guests;
+      if (ahead) {
+        board.replaceChildren();
+        preview.textContent = st.status === "out" ? "No problem. See you another week."
+          : "The agents plan pace groups when this becomes the next run. Your sign-up becomes your check-in then, and you can change it any time.";
+        return;
+      }
       const bands = (latest && latest.pace_board) || [];
       const max = Math.max(1, ...bands.map((b) => b.going));
       const mineBand = Math.floor(st.pace * 2) / 2;
@@ -828,21 +1002,27 @@ function clubPage(slug, tab) {
           : `At ${fmtPace(st.pace)}/mi you may start a new group. The Run Director makes sure no one runs alone.`;
     }
     sync();
-    openSheet("Check in for tonight", h("form", { class: "form checkin", onsubmit: async (e) => {
+    openSheet(ahead ? `Sign up for ${ahead.label}` : `Check in for ${club.run_label || "the next run"}`, h("form", { class: "form checkin", onsubmit: async (e) => {
       e.preventDefault();
+      const body = { status: st.status, pace: fmtPace(st.pace), miles: st.miles, guests: st.guests };
       try {
-        await api(`/api/clubs/${slug}/checkin`, { method: "POST", body: { status: st.status, pace: fmtPace(st.pace), miles: st.miles, guests: st.guests } });
-        closeSheet(); toast("Checked in. The Run Director is updating the plan."); poll();
+        if (ahead) {
+          await api(`/api/clubs/${slug}/calendar/${ahead.date}/signup`, { method: "POST", body });
+          closeSheet(); toast(st.status === "out" ? "Got it, you're out that week." : `You're signed up for ${ahead.label}.`); drawRuns();
+          return;
+        }
+        await api(`/api/clubs/${slug}/checkin`, { method: "POST", body });
+        closeSheet(); toast("Checked in. The Run Director is updating the plan."); poll(); if (tab === "runs") drawRuns();
       } catch (err) { toast(err.message); }
     } },
       statusSeg,
       h("div", { class: "row2" },
-        h("div", {}, h("div", { class: "label" }, "Today's pace (min/mi)"), stepper(paceOut, 1 / 6, () => st.pace, (v) => (st.pace = clampPace(v)), "pace")),
+        h("div", {}, h("div", { class: "label" }, ahead ? "Pace that day (min/mi)" : "Today's pace (min/mi)"), stepper(paceOut, 1 / 6, () => st.pace, (v) => (st.pace = clampPace(v)), "pace")),
         h("div", {}, h("div", { class: "label" }, "Miles you'd like"), stepper(milesOut, 0.5, () => st.miles, (v) => (st.miles = Math.min(20, Math.max(0.5, v))), "miles"))),
       h("div", { class: "row-inline" }, h("div", { class: "label" }, "Friends coming"), stepper(guestsOut, 1, () => st.guests, (v) => (st.guests = Math.min(4, Math.max(0, v))), "friends")),
       h("p", { class: "muted small" }, `Your usual: ${fmtPace(ME.pace)}/mi, ${ME.usual_miles} mi. Faster or slower today is fine.`),
       board, preview,
-      h("button", { class: "btn primary block", type: "submit" }, "Save check-in")));
+      h("button", { class: "btn primary block", type: "submit" }, ahead ? "Save sign-up" : "Save check-in")));
   }
 
   // ------------- live state
@@ -894,12 +1074,14 @@ function clubPage(slug, tab) {
     safetyKey = key;
     return safetyGrid;
   }
+  const addOn = (r) => String(Math.round((r.group.miles - drawn.baseMiles) * 100) / 100);
   function showRouteInfo() {
     if (!drawn) return;
     drawn.routes.forEach((r) => {
       const el = groupsBox.querySelector(`.group-route[data-g="${r.group.id}"]`);
       if (!el) return;
       const bits = [];
+      if (drawn.together) bits.push(r.split ? `shared route, then a ${addOn(r)} mi add-on at flag ${r.group.id}` : "shared route only");
       if (r.street && r.turns !== null) bits.push(`${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? " plus the turnaround" : ""}`);
       if (r.riskLabel) bits.push(r.riskLabel);
       el.textContent = bits.length ? `Route: ${bits.join(" · ")}` : "";
@@ -1003,7 +1185,7 @@ function clubPage(slug, tab) {
     const paint = (confirming) => {
       const lastCap = isCap && captains <= 1;
       actions.replaceChildren(...(confirming ? [
-        h("p", {}, `Remove ${m.name} from ${club.name}? They'll lose access to the chat and tonight's plan, and they're taken out of tonight's groups. They can ask to join again later.`),
+        h("p", {}, `Remove ${m.name} from ${club.name}? They'll lose access to the chat and the plan, and they're taken out of the next run's groups. They can ask to join again later.`),
         h("div", { class: "row2" }, h("button", { class: "btn", type: "button", onclick: () => paint(false) }, "Cancel"),
           h("button", { class: "btn danger", type: "button", onclick: () => act("remove", `${first} was removed from the club.`) }, `Yes, remove ${first}`)),
       ] : [
@@ -1052,6 +1234,9 @@ function clubPage(slug, tab) {
         h("div", {}, h("label", {}, "Finishes"), h("b", {}, g.back_at)),
         h("div", {}, h("label", {}, "People"), h("b", {}, `${g.headcount}${guests ? ` (${guests} guest${guests > 1 ? "s" : ""})` : ""}`))),
       (() => { const r = drawn && drawn.routes.find((x) => x.group.id === g.id);
+        if (r && drawn.together) return h("p", { class: "small" }, r.split
+          ? `Route: runs the shared route with everyone, splits off at flag ${g.id} for a ${addOn(r)} mi out-and-back, then rejoins and finishes with the club.`
+          : "Route: the shared route, start to finish. Faster groups split off for add-ons and come back to you.");
         if (!r || !r.street) return null;
         return h("p", { class: "small" }, `Route: ${r.miles.toFixed(1)} mi on the streets, ${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? ", turn around at the flag marked " + g.id : ""}${r.riskLabel ? `, ${r.riskLabel}` : ""}.`); })(),
       h("ul", { class: "person-list" }, rows),
@@ -1066,7 +1251,7 @@ function clubPage(slug, tab) {
     const pct = Math.min(100, (total / s.limits.run_token_budget) * 100);
     budgetFill.style.width = `${pct}%`;
     budgetFill.style.background = pct > 85 ? "var(--safety)" : pct > 60 ? "var(--maybe)" : "var(--in)";
-    budgetLabel.textContent = `${pct.toFixed(1)}% of tonight's ${s.limits.run_token_budget.toLocaleString()}-token budget`;
+    budgetLabel.textContent = `${pct.toFixed(1)}% of this run's ${s.limits.run_token_budget.toLocaleString()}-token budget`;
     byAgent.replaceChildren(...s.tokens.by_agent.filter((a) => a.calls > 0).map((a) =>
       h("tr", {}, h("td", { class: `a-${a.agent.replace(/\s+/g, "-")}` }, a.agent), h("td", {}, `${a.calls} calls`),
         h("td", {}, `${(a.tin + a.tout).toLocaleString()} tok`), h("td", {}, `$${a.cost.toFixed(4)}`))));
@@ -1078,6 +1263,8 @@ function clubPage(slug, tab) {
     try { s = await api(`/api/clubs/${slug}/state?after_msg=${lastMsg}&after_event=${lastEvent}`); }
     catch (e) { console.error(e); return; }
     if (!alive) return;
+    if (runDate && s.run_date !== runDate) { resetLive(); loadClub(); return; }   // the run moved on: start fresh
+    runDate = s.run_date;
     latest = s;
     const live = s.mode !== "demo";
     setModeBadge(s.mode, s.model);
@@ -1094,7 +1281,7 @@ function clubPage(slug, tab) {
       h("div", { class: `agent a-${e.agent.replace(/\s+/g, "-")}` }, e.agent), h("div", { class: "what" }, describeEvent(e))))));
     if (s.events.length) lastEvent = s.events[s.events.length - 1].id;
     const c = s.my_checkin;
-    myStatus.textContent = c ? `You: ${c.status === "in" ? `in, ${c.miles} mi at ${fmtPace(c.pace)}/mi` : c.status === "maybe" ? "maybe" : "out tonight"}` : "You haven't checked in.";
+    myStatus.textContent = c ? `You: ${c.status === "in" ? `in, ${c.miles} mi at ${fmtPace(c.pace)}/mi` : c.status === "maybe" ? "maybe" : "out"}` : "You haven't checked in.";
     renderPlan(s);
     renderTokens(s);
   }
