@@ -155,7 +155,7 @@ def concierge(club_id, runner_id, text):
         except BudgetExceeded:
             reply = rule_concierge(club_id, me, text, check_in)
         except Exception as e:
-            db.log_event(club_id, "Concierge", "error", f"Model call failed ({e.__class__.__name__}); used rules.")
+            db.log_event(club_id, "Concierge", "error", f"Model call failed ({e.__class__.__name__}: {str(e)[:400]}); used rules.")
             reply = rule_concierge(club_id, me, text, check_in)
     else:
         reply = rule_concierge(club_id, me, text, check_in)

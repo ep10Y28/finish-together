@@ -35,6 +35,7 @@ Open **http://localhost:8000**. You start signed in as Rae Simmons, captain of L
 - **Port busy?** `python3 run.py --port 8001`
 - **Start over:** `python3 run.py --reset` (or **Reset** in the Agents panel for tonight's run only)
 - **Self-check:** `python3 scripts/smoke_test.py` should print `OK`.
+- **"Model call failed" in the Agents panel?** `python3 scripts/check_model.py` makes one plain call and one tool call in each API style and prints what the model service says (never your key).
 - **Token counts for the report:** after *Play the evening*, `python3 scripts/token_report.py` prints tokens and cost per agent.
 - **On your phone:** `python3 run.py --host 0.0.0.0`, then open the address it prints on a phone on the same Wi-Fi. On iPhone use Share → *Add to Home Screen*; on Android, Chrome's menu → *Add to Home screen*. It opens full screen like an app.
 - **The map** needs an internet connection (map tiles and street routing are free OpenStreetMap services). Without one, everything else still works and routes are sketched as dashed lines.
@@ -75,7 +76,7 @@ On a phone, tabs: **Tonight** (finish time, map, groups), **Chat**, **Agents**, 
 
 The agents decide; plain Python does the math (`app/tools.py`). The model never computes a distance or a finish time, so the plan's numbers are always right and token use stays low. The map then draws each group's distance as a route on real streets (`web/routes.js`). Routes favor **straight lines and few turns**: the app tries several route shapes (out-and-back on eight headings, or for a separate finish an overshoot, a backtrack or a side detour), scores each by turns per mile, distance error and street safety, and gives every group the same shape, each turning at its own numbered flag. A captain can switch the route style to **Run together**: everyone runs one shared route (the slowest group's distance) and starts as one pack; each faster group splits off at its numbered flag for a short out-and-back of exactly its extra distance and rejoins, so all groups still finish together.
 
-Model: `gpt-6-luna` through Portkey with the course key (header `x-portkey-api-key` only), or your own `OPENAI_API_KEY`.
+Model: `gpt-6-luna` through Portkey with the course key (header `x-portkey-api-key` only), or your own `OPENAI_API_KEY`. gpt-6-luna won't take tool calls on chat completions while it reasons, so the agents use the **Responses API** with reasoning set low, and switch to chat completions with reasoning off if the Responses API refuses a request. To pin one, add `API_STYLE=responses` or `API_STYLE=chat` to `.env` (not a secret).
 
 ## Safety and privacy
 

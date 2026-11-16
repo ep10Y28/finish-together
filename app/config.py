@@ -28,11 +28,17 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
 # Course setup: Portkey's OpenAI-compatible endpoint, key only in the
 # x-portkey-api-key header (no Authorization header).
-PORTKEY_URL = "https://api.portkey.ai/v1/chat/completions"
-PORTKEY_MODEL = "gpt-6-luna"
+PORTKEY_BASE = "https://api.portkey.ai/v1"
+PORTKEY_MODEL = os.getenv("PORTKEY_MODEL", "").strip() or "gpt-6-luna"
 
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_MODEL = "gpt-6-luna"
+OPENAI_BASE = "https://api.openai.com/v1"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or "gpt-6-luna"
+
+# gpt-6-luna won't take tool calls on chat completions while it reasons, so the agents use the
+# Responses API (reasoning kept, set low) and fall back to chat completions with reasoning off.
+# Optional, not secret: API_STYLE=responses or chat in .env pins one style.
+API_STYLE = os.getenv("API_STYLE", "auto").strip().lower()
+REASONING_EFFORT = "low"
 
 if PORTKEY_API_KEY:
     MODE = "portkey"

@@ -143,7 +143,7 @@ def run_scout(reason="scheduled"):
             except BudgetExceeded:
                 added, mode = counter["n"] + rule_scout(sig), "rules (budget)"
             except Exception as e:
-                db.log_event(None, AGENT, "error", f"Model call failed ({e.__class__.__name__}); used rules.")
+                db.log_event(None, AGENT, "error", f"Model call failed ({e.__class__.__name__}: {str(e)[:400]}); used rules.")
                 added, mode = counter["n"] + rule_scout(sig), "rules (model error)"
         elif has_any:
             added = rule_scout(sig)
