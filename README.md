@@ -92,7 +92,7 @@ Every model call is logged with its token counts and cost (`events` table in `fi
 
 - `data/clubs.json`: three made-up clubs with meeting points, schedules, opening check-ins and the scripted evening.
 - `data/runners.json`: 44 made-up people with fake 555 phone numbers. No real people's data.
-- Map: [Leaflet](https://leafletjs.com) (included in `web/vendor/`), tiles from CARTO over OpenStreetMap data, walking routes from the OpenStreetMap foot router at routing.openstreetmap.de, place search from OpenStreetMap Nominatim. All free, no keys.
+- Map: [Leaflet](https://leafletjs.com) (included in `web/vendor/`), map tiles from the standard OpenStreetMap tile server, walking routes from the OpenStreetMap foot router at routing.openstreetmap.de, place search from OpenStreetMap Nominatim. All free, no keys.
 
 ## Layout
 

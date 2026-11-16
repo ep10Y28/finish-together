@@ -125,6 +125,12 @@ p { margin: 0 0 10px; }
 .picker-map { height: 260px; margin: 8px 0; }
 .map-missing { display: grid; place-items: center; color: var(--muted); padding: 20px; text-align: center; }
 .leaflet-container { font: inherit; }
+/* Softer, neutral map so the colored routes stand out; dark mode inverts the tiles only. */
+.leaflet-tile-pane { filter: saturate(.55) contrast(.95); }
+@media (prefers-color-scheme: dark) {
+  .leaflet-container { background: #1d1c1a; }
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) saturate(.35) brightness(.85) contrast(.9); }
+}
 .leaflet-touch .leaflet-bar a { width: 36px; height: 36px; line-height: 36px; }
 .pin { display: grid !important; place-items: center; background: none; border: none; }
 .pin span {

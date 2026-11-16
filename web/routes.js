@@ -7,7 +7,7 @@
 // Street routes come from the free OpenStreetMap foot router run by FOSSGIS
 // (routing.openstreetmap.de, no key needed). If it can't be reached, the map falls
 // back to a straight-line sketch of the same shape, drawn dashed and labelled.
-// Map tiles: CARTO basemaps over OpenStreetMap data (free, attribution shown).
+// Map tiles: the standard OpenStreetMap tile server (free, no key, attribution shown).
 "use strict";
 
 const FT_MAP = (() => {
@@ -16,7 +16,6 @@ const FT_MAP = (() => {
   const MI = 1609.344;
   const cache = new Map();
   let routerDown = false;                   // after one failure, stop calling it for this page load
-  const dark = () => window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   const GROUP_COLORS = ["#e4572e", "#3a86ff", "#06a77d", "#8338ec", "#d9a21b", "#ff006e", "#118ab2", "#fb5607"];
   const groupColor = (i) => GROUP_COLORS[i % GROUP_COLORS.length];
@@ -114,9 +113,10 @@ const FT_MAP = (() => {
     }
     const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false })
       .setView(center, zoom);
-    L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark() ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
-      maxZoom: 19, subdomains: "abcd",
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    // Standard OpenStreetMap tiles: free, no key, attribution required. Dark mode is a CSS filter (styles.css).
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(map);
     return map;
   }
