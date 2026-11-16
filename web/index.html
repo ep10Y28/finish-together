@@ -2,101 +2,55 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Finish Together</title>
+  <meta name="description" content="Run club check-ins and AI-planned routes so every pace group finishes together.">
+  <meta name="theme-color" content="#1f3a5f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Finish Together">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" href="/static/icons/favicon-64.png">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="top">
-    <div class="brand">
-      <div class="logo" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="30" height="30"><path d="M4 26h24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M9 26V8l9 3-9 3" fill="currentColor"/><circle cx="22" cy="12" r="2.6" fill="currentColor"/><path d="M22 15l-2 6 3 5M21 18l4 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
-      </div>
-      <div>
-        <h1>Finish Together</h1>
-        <p id="subtitle" class="muted">Tonight's group run</p>
-      </div>
-    </div>
+    <a class="brand" href="#/">
+      <img src="/static/icons/icon-192.png" alt="" width="34" height="34">
+      <span>Finish Together</span>
+    </a>
     <div class="top-actions">
-      <span id="mode" class="badge">…</span>
-      <button id="simulate" class="btn ghost">Play the evening</button>
-      <button id="replan" class="btn ghost">Re-plan</button>
-      <button id="reset" class="btn ghost">Reset</button>
+      <span id="mode" class="badge" title="Whether the agents are using the AI model or the built-in rules">…</span>
+      <button id="account" class="account" aria-label="Switch who you are">
+        <span id="accountAvatar" class="avatar sm">?</span><span id="accountName">Sign in</span>
+      </button>
     </div>
   </header>
 
-  <section class="hero">
-    <div>
-      <div class="eyebrow">Everyone back at the bar by</div>
-      <div id="backAt" class="big">--:--</div>
-      <div id="heroSub" class="muted"></div>
+  <main id="view" aria-live="polite"></main>
+
+  <!-- Bottom sheet used for sign-in, check-in, new club -->
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-backdrop" data-close></div>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="sheet-grab"></div>
+      <div class="sheet-head">
+        <h2 id="sheetTitle"></h2>
+        <button class="icon-btn" data-close aria-label="Close">✕</button>
+      </div>
+      <div id="sheetBody" class="sheet-body"></div>
     </div>
-    <div class="stats">
-      <div class="stat"><span id="statIn">0</span><label>going</label></div>
-      <div class="stat"><span id="statMaybe">0</span><label>maybe</label></div>
-      <div class="stat"><span id="statGroups">0</span><label>groups</label></div>
-      <div class="stat"><span id="statSpread">0</span><label>min apart</label></div>
-    </div>
-  </section>
+  </div>
 
-  <main class="grid">
-    <!-- Feed and chat -->
-    <section class="panel feed">
-      <div class="panel-head">
-        <h2>Tonight's feed</h2>
-        <span class="muted small">check-ins and chat</span>
-      </div>
-      <div id="messages" class="messages" aria-live="polite"></div>
-      <div class="composer">
-        <div class="as">
-          <label for="who" class="small muted">You are</label>
-          <select id="who"></select>
-          <div class="quick">
-            <button class="chip in" data-status="in">I'm in</button>
-            <button class="chip maybe" data-status="maybe">Maybe</button>
-            <button class="chip out" data-status="out">Out</button>
-          </div>
-        </div>
-        <form id="chatForm">
-          <input id="chatInput" maxlength="400" autocomplete="off"
-                 placeholder="e.g. in for 5 at 9:30, bringing a friend">
-          <button class="btn primary" type="submit">Send</button>
-        </form>
-      </div>
-    </section>
+  <div id="toast" class="toast" role="status" hidden></div>
 
-    <!-- Plan -->
-    <section class="panel plan">
-      <div class="panel-head">
-        <h2>The plan</h2>
-        <span id="planMeta" class="muted small"></span>
-      </div>
-      <div id="race" class="race"></div>
-      <div id="groups" class="groups"></div>
-    </section>
-
-    <!-- Agents -->
-    <section class="panel agents">
-      <div class="panel-head">
-        <h2>Agents at work</h2>
-        <span class="muted small">live trace</span>
-      </div>
-      <div class="meter">
-        <div class="meter-row">
-          <div><span id="tokTotal">0</span><label>tokens</label></div>
-          <div><span id="tokCost">$0.0000</span><label>cost tonight</label></div>
-        </div>
-        <div class="bar"><div id="budgetFill"></div></div>
-        <div id="budgetLabel" class="small muted"></div>
-        <table id="byAgent" class="by-agent"></table>
-      </div>
-      <div id="events" class="events"></div>
-    </section>
-  </main>
-
-  <footer class="muted small">Demo data: runners and loop distances are made up. MGT 409 final project.</footer>
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/routes.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

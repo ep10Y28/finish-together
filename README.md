@@ -1,6 +1,6 @@
 # Finish Together
 
-**A run club's AI captain.** Runners check in and chat about tonight's group run. A small team of agents sorts them into pace groups and plans each group's loops so that **every group, fast or slow, gets back to the bar at the same time.** When someone joins late or drops out, the agents re-plan on their own.
+**Run clubs where every pace group finishes at the same time.** Runners check in for the club's next run, pick the pace they want that day and chat about joining. A small team of AI agents sorts them into pace groups and gives each group a route on a real map, so that **fast and slow groups all reach the finish together.** When someone joins late or drops out, the agents re-plan on their own.
 
 MGT 409 (AI Foundations for Managers) final project.
 
@@ -11,7 +11,7 @@ MGT 409 (AI Foundations for Managers) final project.
 You need Python 3.10 or newer.
 
 ```bash
-git clone <this repo's URL>
+git clone https://github.com/ep10Y28/finish-together.git
 cd finish-together
 python3 -m pip install -r requirements.txt
 ```
@@ -29,64 +29,83 @@ Start it:
 python3 run.py
 ```
 
-Open **http://localhost:8000** and press **Play the evening** to watch a scripted night unfold: runners check in, someone brings a friend, someone tries a prompt-injection attack, someone drops out, and the agents re-plan each time.
+Open **http://localhost:8000**. You start signed in as Rae Simmons, captain of Last Lap Run Club in Philadelphia. Open the **Agents** panel and press **Play the evening** to watch a scripted night: runners check in at different paces, someone brings a friend, someone tries a prompt-injection attack, someone drops out, and the agents re-plan each time. Then press **▶ Watch the run** on the map.
 
 - **No key?** The app still runs in **demo mode**: the agents fall back to plain rules, and the badge at the top says so.
 - **Port busy?** `python3 run.py --port 8001`
-- **Start a fresh evening:** press **Reset**, or `python3 run.py --reset`
+- **Start over:** `python3 run.py --reset` (or **Reset** in the Agents panel for tonight's run only)
 - **Self-check:** `python3 scripts/smoke_test.py` should print `OK`.
+- **On your phone:** `python3 run.py --host 0.0.0.0`, then open the address it prints on a phone on the same Wi-Fi. On iPhone use Share → *Add to Home Screen*; on Android, Chrome's menu → *Add to Home screen*. It opens full screen like an app.
+- **The map** needs an internet connection (map tiles and street routing are free OpenStreetMap services). Without one, everything else still works and routes are sketched as dashed lines.
 
-## What you see
+## What you can do
 
-| Panel | What it shows |
+| Who | What |
 |---|---|
-| **Tonight's feed** | Check-ins, group chat, the Concierge's replies, the Captain's plans and nudges. Pick who you are, tap *I'm in / Maybe / Out*, or just type: "in for 5 at 9:30, bringing a friend". |
-| **The plan** | One card per pace group with its loops, distance and return time, plus a lane chart: faster groups run farther, everyone finishes together. |
-| **Agents at work** | A live trace of every model call and tool call, with tokens and cost per agent against tonight's token budget. |
+| **Anyone** | Browse clubs on a map, see each club's schedule, meeting point, finish and tonight's routes. Sign up with a name, usual pace and usual distance. Ask to join a club. Names, chat and the agent trace stay hidden until you're a member. |
+| **Members** | Check in for the next run: *I'm in / Maybe / Out*, **today's pace** (faster or slower than usual is fine), distance and friends coming. The check-in screen shows **the paces people already picked** and which group your pace would join. Or just chat: "in for 5 at 9:30, bringing a friend". |
+| **Club captain** (a person) | Approves or declines join requests. Sets the meeting point and, if the run doesn't loop back, a **separate finish** by tapping the map or searching a place. Chooses a **distance** target (the middle group runs about this far) or a **time** target (everyone runs this long). Can start a new club. |
+
+Demo sign-in: tap your name at the top right to be anyone. The three seeded clubs (Philadelphia, New Haven, Chicago) and all 44 people are made up.
+
+## The screens
+
+On a phone, tabs: **Tonight** (finish time, map, groups), **Chat**, **Agents**, **Club**. On a wide screen, chat, plan and agents sit side by side.
+
+| Part | What it shows |
+|---|---|
+| **Tonight** | When everyone finishes, how many are going, a map with each group's route on real streets from the start to the finish, a lane chart (faster groups run farther, everyone finishes together) and one card per pace group. **▶ Watch the run** moves each runner's dot along their group's route. |
+| **Chat** | Check-ins, group chat, the Concierge's replies, the Run Director's plans and nudges. |
+| **Agents** | A live trace of every model call and tool call, with tokens and cost per agent against tonight's token budget. Captains get *Play the evening*, *Re-plan* and *Reset*. |
+| **Club** | About and schedule, join requests (captain), run settings with the map picker (captain), members. |
 
 ## The agents
 
 | Agent | Job | Tools |
 |---|---|---|
-| **Concierge** | Reads one runner's chat message and turns it into a check-in; answers "who's going?" | `check_in`, `who_is_coming` (public fields only) |
-| **Group Planner** | Sorts the runners who are in into pace groups. No one runs alone. | `make_groups(max_spread)` |
-| **Route Builder** | Picks loops for each group so all groups get back at the same time. | `build_routes(target_minutes)`, `swap_loops`, `verify_plan` |
-| **Captain** (orchestrator) | Decides whether a change needs a new plan, asks the other two, settles conflicts, posts the plan and nudges maybes. | `ask_group_planner`, `ask_route_builder`, `post_plan`, `nudge_maybe_runners`, `skip_replan` |
+| **Concierge** | Reads one runner's chat message and turns it into a check-in (status, today's pace, miles, guests); answers "who's going?" | `check_in`, `who_is_coming` (public fields only) |
+| **Group Planner** | Sorts the runners who are in into pace groups by the pace they picked today. No one runs alone. | `make_groups(max_spread)` |
+| **Route Builder** | Gives each group a distance so every group reaches the finish at the target time, and checks the result. For a point-to-point run, no group may run less than the walk from start to finish. | `build_routes`, `set_group_miles`, `verify_plan` |
+| **Run Director** (orchestrator) | Decides whether a change needs a new plan, asks the other two, settles conflicts, posts the plan and nudges maybes. | `ask_group_planner`, `ask_route_builder`, `post_plan`, `nudge_maybe_runners`, `skip_replan` |
 
-The agents decide; plain Python does the math (`app/tools.py`). The model never computes a distance or a finish time, so the plan's numbers are always right and token use stays low.
+The agents decide; plain Python does the math (`app/tools.py`). The model never computes a distance or a finish time, so the plan's numbers are always right and token use stays low. The map then draws each group's distance as a route on real streets (`web/routes.js`).
 
 Model: `gpt-6-luna` through Portkey with the course key (header `x-portkey-api-key` only), or your own `OPENAI_API_KEY`.
 
-## Safety
+## Safety and privacy
 
-- **Prompt injection:** messages are screened before they reach a model (`app/safety.py`), and the Concierge has no tool that can see anyone's phone number, so even a missed attack has nothing to leak.
+- **Prompt injection:** chat messages, names, join notes and club settings are screened before they reach a model or the page (`app/safety.py`). The Concierge has no tool that can see anyone's phone number, so even a missed attack has nothing to leak.
 - **Leaks:** anything shaped like a phone number or email is scrubbed from agent replies.
-- **Bad math:** every plan is re-checked by `verify_plan`; a plan whose numbers don't add up, or whose groups come back more than 6 minutes apart, is rejected and rebuilt.
+- **Who sees what:** the server checks membership on every request. Non-members see routes and group sizes, never names, chat or the agent trace. Only the club's captain can approve members or change the run.
+- **Location:** Finish Together never tracks anyone. *Watch the run* is a simulation drawn from the plan. The only places stored are the club's meeting point and finish, which the captain chooses.
+- **Bad math:** every plan is re-checked by `verify_plan`; a plan whose numbers don't add up, whose groups finish more than 6 minutes apart, or whose groups can't reach the finish is rejected and rebuilt. If the finish is too far for the slowest group in the time set, the target is stretched and the plan says why.
 - **Overspending:** a per-evening token budget, a cap on re-plans, a cap on tool steps per agent, and a per-runner chat rate limit. When the budget runs out, the agents finish with rules instead of model calls.
-- **Cheap by design:** the Captain skips re-planning when nobody's in-or-out status changed.
+- **Cheap by design:** the Run Director skips re-planning when nobody's in-or-out status, pace or the club's settings changed.
 
-Every block and fallback shows up in the *Agents at work* panel.
+Every block and fallback shows up in the *Agents* panel.
 
 ## Tokenomics
 
 Every model call is logged with its token counts and cost (`events` table in `finish_together.db`). Prices per million tokens are set in `app/config.py`.
 
-## Data
+## Data and map sources
 
-`data/runners.json` (24 made-up runners), `data/routes.json` (7 loops from the start, demo distances, not a surveyed map), `data/opening.json` (check-ins already in when the evening opens) and `data/sim_script.json` (the scripted evening). No real people's data.
+- `data/clubs.json`: three made-up clubs with meeting points, schedules, opening check-ins and the scripted evening.
+- `data/runners.json`: 44 made-up people with fake 555 phone numbers. No real people's data.
+- Map: [Leaflet](https://leafletjs.com) (included in `web/vendor/`), tiles from CARTO over OpenStreetMap data, walking routes from the OpenStreetMap foot router at routing.openstreetmap.de, place search from OpenStreetMap Nominatim. All free, no keys.
 
 ## Layout
 
 ```
-run.py               start the app
-app/main.py          FastAPI routes
+run.py               start the app (--port, --host, --reset)
+app/main.py          FastAPI routes, membership and captain checks
 app/agents.py        the four agents
 app/llm.py           agent loop, token logging, budget
-app/tools.py         grouping, routing and verification math
+app/tools.py         grouping, distance and verification math
 app/safety.py        injection screen, scrubbing, rate limit
 app/db.py            SQLite storage
 app/config.py        settings, .env lookup, prices, limits
-web/                 the page (HTML, CSS, JS; no build step)
-data/                demo data
+web/                 the page: HTML, CSS, JS, map code, icons, manifest (no build step)
+data/                demo clubs and people
 scripts/smoke_test.py
 ```

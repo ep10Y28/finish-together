@@ -48,12 +48,17 @@ PRICE_OUTPUT_PER_M = 10.00
 
 # Safety and spending limits
 RUN_TOKEN_BUDGET = 60_000       # all agents combined, per run (one evening)
-MAX_REPLANS_PER_RUN = 12        # the Captain stops re-planning after this
+MAX_REPLANS_PER_RUN = 12        # the Run Director stops re-planning after this
 MAX_TOOL_STEPS = 8              # per agent call, stops loops
 CHAT_LIMIT_PER_MINUTE = 6       # per runner
 MAX_MESSAGE_CHARS = 400
 
+MAX_NAME_CHARS = 40
+MAX_CLUB_FIELD_CHARS = 80
+
 # Planning rules
 MAX_PACE_SPREAD = 0.9           # minutes per mile inside one pace group
 MIN_GROUP_SIZE = 2              # no one runs alone
-RUN_START = "18:30"
+ROUTE_STEP_MILES = 0.25         # group distances are rounded to quarter miles
+MAX_FINISH_SPREAD = 6           # minutes; a plan whose groups come back further apart is rejected
+DEFAULT_TARGET_MINUTES = 45

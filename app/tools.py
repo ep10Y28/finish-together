@@ -2,17 +2,18 @@
 
 Keeping the arithmetic out of the model makes the finish times trustworthy
 and keeps token use low.
+
+A club sets its run either by time ("45 minutes for everyone") or by distance
+("5 miles for the middle group"). Either way the tools turn it into one target
+time, and every pace group gets a distance that brings it back to the start at
+that time: faster groups run farther.
 """
-import itertools
-import json
+import math
 import statistics
 
 from . import config
 
-_ROUTES = json.loads((config.DATA_DIR / "routes.json").read_text())
-LOOPS = _ROUTES["loops"]
-START = _ROUTES["start"]
-LOOP_BY_ID = {l["id"]: l for l in LOOPS}
+STEP = config.ROUTE_STEP_MILES
 
 
 def fmt_pace(p):
@@ -23,12 +24,12 @@ def fmt_pace(p):
     return f"{m}:{s:02d}"
 
 
-def clock(minutes_after_start):
-    h, m = map(int, config.RUN_START.split(":"))
+def clock(minutes_after_start, run_time="18:30"):
+    h, m = map(int, run_time.split(":"))
     total = h * 60 + m + round(minutes_after_start)
-    hh, mm = divmod(total, 60)
+    hh, mm = divmod(total % (24 * 60), 60)
     suffix = "PM" if hh >= 12 else "AM"
-    hh12 = hh - 12 if hh > 12 else hh
+    hh12 = hh - 12 if hh > 12 else (12 if hh == 0 else hh)
     return f"{hh12}:{mm:02d} {suffix}"
 
 
@@ -82,51 +83,93 @@ def make_groups(checkins, max_spread=config.MAX_PACE_SPREAD):
     return out
 
 
-def _best_combo(ideal_miles):
-    best = None
-    for n in range(1, 5):
-        for combo in itertools.combinations_with_replacement(LOOPS, n):
-            miles = sum(l["miles"] for l in combo)
-            score = abs(miles - ideal_miles) + 0.04 * n
-            if best is None or score < best[0]:
-                best = (score, combo, miles)
-    return list(best[1]), round(best[2], 2)
+STREET_FACTOR = 1.25     # streets are longer than a straight line; the map shows the real distance
 
 
-def default_target(groups):
-    natural = [g["wanted_miles"] * g["pace"] for g in groups]
-    t = statistics.median(natural)
-    return int(max(25, min(80, round(t / 5) * 5)))
+def straight_miles(a_lat, a_lng, b_lat, b_lng):
+    r = 3958.8
+    p1, p2 = math.radians(a_lat), math.radians(b_lat)
+    dp, dl = p2 - p1, math.radians(b_lng - a_lng)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
 
 
-def build_routes(groups, target_minutes=None):
-    """Give every group loops so that all groups get back at about the same time."""
-    if not groups:
-        return {"groups": [], "target_minutes": None, "spread_minutes": 0, "conflicts": []}
-    target = int(target_minutes) if target_minutes else default_target(groups)
-    target = max(20, min(100, target))
-    planned = []
-    for g in groups:
-        loops, miles = _best_combo(target / g["pace"])
-        planned.append(_with_route(g, [l["id"] for l in loops]))
-    return finish(planned, target)
+def is_point_to_point(club):
+    return club.get("end_lat") is not None and club.get("end_lng") is not None
 
 
-def _with_route(group, loop_ids):
-    loops = [LOOP_BY_ID[i] for i in loop_ids if i in LOOP_BY_ID]
-    miles = round(sum(l["miles"] for l in loops), 2)
+def min_miles(club):
+    """Shortest distance any group can run. A loop can be as short as we like (1 mile floor);
+    a point-to-point run has to at least reach the finish."""
+    if not is_point_to_point(club):
+        return 1.0
+    d = straight_miles(club["start_lat"], club["start_lng"], club["end_lat"], club["end_lng"]) * STREET_FACTOR
+    return max(1.0, math.ceil(d / STEP) * STEP)
+
+
+def target_minutes(groups, club):
+    """Turn the club's setting into one target time for everyone.
+
+    time:      the club runs for N minutes.
+    distance:  the middle pace group runs N miles; everyone else runs for the same time.
+    """
+    mode = club.get("target_mode") or "time"
+    value = float(club.get("target_value") or config.DEFAULT_TARGET_MINUTES)
+    if mode == "distance" and groups:
+        mid = statistics.median_low([g["pace"] for g in groups])
+        t = value * mid
+    else:
+        t = value
+    return int(max(15, min(150, round(t))))
+
+
+def _quarter(miles, floor=1.0):
+    return max(floor, round(miles / STEP) * STEP)
+
+
+def _with_route(group, miles, run_time):
+    miles = round(float(miles), 2)
     minutes = round(miles * group["pace"], 1)
     g = dict(group)
-    g.update({
-        "loops": [{"id": l["id"], "name": l["name"], "miles": l["miles"]} for l in loops],
-        "miles": miles,
-        "minutes": minutes,
-        "back_at": clock(minutes),
-    })
+    g.update({"miles": miles, "minutes": minutes, "back_at": clock(minutes, run_time)})
     return g
 
 
-def finish(planned, target):
+def _target_info(club, minutes, note=None):
+    return {"mode": club.get("target_mode") or "time", "value": club.get("target_value"), "minutes": minutes,
+            "note": note}
+
+
+def _route_info(club):
+    if is_point_to_point(club):
+        return {"type": "point", "min_miles": min_miles(club),
+                "end": {"name": club.get("end_name") or "Finish", "lat": club["end_lat"], "lng": club["end_lng"]}}
+    return {"type": "loop", "min_miles": 1.0, "end": None}
+
+
+def build_routes(groups, club):
+    """Give every group a distance so that all groups get back at about the same time."""
+    run_time = club.get("run_time", "18:30")
+    if not groups:
+        return {"groups": [], "target_minutes": None, "spread_minutes": 0, "conflicts": [],
+                "target": _target_info(club, None), "run_time": run_time, "back_at": None,
+                "route": _route_info(club)}
+    target = target_minutes(groups, club)
+    floor = min_miles(club)
+    note = None
+    slowest = max(g["pace"] for g in groups)
+    if floor * slowest > target:
+        # The finish is too far for the slowest group to reach in time: stretch the run for everyone.
+        new = int(math.ceil(floor * slowest))
+        note = (f"The finish is about {floor:g} miles away, so the run was stretched from {target} to "
+                f"{new} minutes for the slowest group to make it.")
+        target = new
+    planned = [_with_route(g, _quarter(target / g["pace"], floor), run_time) for g in groups]
+    return finish(planned, target, club, note)
+
+
+def finish(planned, target, club, note=None):
+    run_time = club.get("run_time", "18:30")
     times = [g["minutes"] for g in planned]
     conflicts = []
     for g in planned:
@@ -137,36 +180,42 @@ def finish(planned, target):
     return {
         "groups": planned,
         "target_minutes": target,
-        "back_at": clock(statistics.median(times)),
+        "target": _target_info(club, target, note),
+        "run_time": run_time,
+        "route": _route_info(club),
+        "back_at": clock(statistics.median(times), run_time),
         "spread_minutes": round(max(times) - min(times), 1),
         "conflicts": conflicts,
     }
 
 
-def swap_loops(plan, group_id, loop_ids):
-    """Let the Route Builder hand-pick loops for one group, then re-check the math."""
-    bad = [i for i in loop_ids if i not in LOOP_BY_ID]
-    if bad:
-        return None, f"Unknown loop ids: {bad}"
-    groups = [(_with_route(g, loop_ids) if g["id"] == group_id else g) for g in plan["groups"]]
-    return finish(groups, plan["target_minutes"]), None
+def set_group_miles(plan, group_id, miles, club):
+    """Let the Route Builder hand-set one group's distance, then re-check the math."""
+    miles = float(miles)
+    if not 1 <= miles <= 20:
+        return None, "miles must be between 1 and 20"
+    if miles < min_miles(club):
+        return None, f"the finish is {min_miles(club):g} miles away; no group can run less than that"
+    if not any(g["id"] == group_id for g in plan["groups"]):
+        return None, f"no group {group_id}"
+    groups = [(_with_route(g, _quarter(miles, min_miles(club)), club.get("run_time", "18:30"))
+               if g["id"] == group_id else g) for g in plan["groups"]]
+    return finish(groups, plan["target_minutes"], club, (plan.get("target") or {}).get("note")), None
 
 
-def verify_plan(plan, tolerance_minutes=6):
-    """Recompute every number from the loop library. Rejects a plan whose numbers don't add up
+def verify_plan(plan, tolerance_minutes=config.MAX_FINISH_SPREAD):
+    """Recompute every number. Rejects a plan whose numbers don't add up
     or whose groups would come back too far apart."""
     errors = []
+    floor = (plan.get("route") or {}).get("min_miles", 1.0)
     for g in plan.get("groups", []):
-        real_miles = round(sum(LOOP_BY_ID[l["id"]]["miles"] for l in g["loops"]), 2)
-        if abs(real_miles - g["miles"]) > 0.01:
-            errors.append(f"Group {g['id']}: says {g['miles']} mi, loops add up to {real_miles} mi")
-        real_min = round(real_miles * g["pace"], 1)
+        if g["miles"] < floor:
+            errors.append(f"Group {g['id']}: {g['miles']} mi can't reach the finish ({floor} mi away)")
+        if not 1 <= g["miles"] <= 20:
+            errors.append(f"Group {g['id']}: {g['miles']} mi is outside 1 to 20 miles")
+        real_min = round(g["miles"] * g["pace"], 1)
         if abs(real_min - g["minutes"]) > 0.5:
             errors.append(f"Group {g['id']}: says {g['minutes']} min, math says {real_min}")
     if plan.get("groups") and plan.get("spread_minutes", 0) > tolerance_minutes:
         errors.append(f"Groups come back {plan['spread_minutes']} min apart, limit is {tolerance_minutes}")
     return {"ok": not errors, "errors": errors}
-
-
-def loop_library():
-    return LOOPS

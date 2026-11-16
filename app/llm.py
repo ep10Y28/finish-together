@@ -14,8 +14,8 @@ class BudgetExceeded(Exception):
     pass
 
 
-def spent_tokens():
-    t = db.token_totals()["total"]
+def spent_tokens(club_id):
+    t = db.token_totals(club_id)["total"]
     return int(t["tin"]) + int(t["tout"])
 
 
@@ -39,23 +39,24 @@ def cost_of(tin, tout):
     return tin / 1e6 * config.PRICE_INPUT_PER_M + tout / 1e6 * config.PRICE_OUTPUT_PER_M
 
 
-def run_agent(agent, system, user, tools, handlers):
+def run_agent(club_id, agent, system, user, tools, handlers):
     """Run one agent until it answers without calling a tool.
 
+    club_id: whose run this is (the token budget is per club, per evening).
     tools: OpenAI-style tool schemas. handlers: name -> python function(**args) -> result.
     Returns the agent's final text.
     """
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     for step in range(config.MAX_TOOL_STEPS):
-        if spent_tokens() >= config.RUN_TOKEN_BUDGET:
-            db.log_event(agent, "guard", f"Token budget of {config.RUN_TOKEN_BUDGET:,} reached; stopped.")
+        if spent_tokens(club_id) >= config.RUN_TOKEN_BUDGET:
+            db.log_event(club_id, agent, "guard", f"Token budget of {config.RUN_TOKEN_BUDGET:,} reached; stopped.")
             raise BudgetExceeded(agent)
         data = _request(messages, tools)
         usage = data.get("usage") or {}
         tin, tout = int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0))
         msg = data["choices"][0]["message"]
         calls = msg.get("tool_calls") or []
-        db.log_event(agent, "llm",
+        db.log_event(club_id, agent, "llm",
                      {"step": step + 1, "tool_calls": [c["function"]["name"] for c in calls],
                       "said": (msg.get("content") or "")[:300]},
                      tin, tout, cost_of(tin, tout))
@@ -76,10 +77,10 @@ def run_agent(agent, system, user, tools, handlers):
                     result = fn(**args)
                 except Exception as e:  # tool errors go back to the model, not to the user
                     result = {"error": str(e)}
-            db.log_event(agent, "tool", {"tool": name, "args": args, "result": _short(result)})
+            db.log_event(club_id, agent, "tool", {"tool": name, "args": args, "result": _short(result)})
             messages.append({"role": "tool", "tool_call_id": c["id"],
                              "content": json.dumps(result, default=str)[:6000]})
-    db.log_event(agent, "guard", f"Stopped after {config.MAX_TOOL_STEPS} steps.")
+    db.log_event(club_id, agent, "guard", f"Stopped after {config.MAX_TOOL_STEPS} steps.")
     return ""
 
 

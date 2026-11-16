@@ -214,5 +214,185 @@
   "color": "#3a86ff",
   "phone": "215-555-0133",
   "bio": "Back from injury, easing in"
+ },
+ {
+  "id": 25,
+  "name": "Rae Simmons",
+  "pace": 9.0,
+  "usual_miles": 5,
+  "color": "#e4572e",
+  "phone": "215-555-0125",
+  "bio": "Captain of Last Lap"
+ },
+ {
+  "id": 26,
+  "name": "Malik Johnson",
+  "pace": 9.6,
+  "usual_miles": 6,
+  "color": "#17bebb",
+  "phone": "215-555-0126",
+  "bio": "Captain of Elm City Easy Miles"
+ },
+ {
+  "id": 27,
+  "name": "Sofia Rossi",
+  "pace": 8.8,
+  "usual_miles": 5,
+  "color": "#ffc914",
+  "phone": "215-555-0127",
+  "bio": "Club member"
+ },
+ {
+  "id": 28,
+  "name": "Ethan Park",
+  "pace": 10.5,
+  "usual_miles": 4,
+  "color": "#2e282a",
+  "phone": "215-555-0128",
+  "bio": "Club member"
+ },
+ {
+  "id": 29,
+  "name": "Amara Diallo",
+  "pace": 9.9,
+  "usual_miles": 6,
+  "color": "#76b041",
+  "phone": "215-555-0129",
+  "bio": "Club member"
+ },
+ {
+  "id": 30,
+  "name": "Noah Fischer",
+  "pace": 11.6,
+  "usual_miles": 3,
+  "color": "#7d5ba6",
+  "phone": "203-555-0130",
+  "bio": "Club member"
+ },
+ {
+  "id": 31,
+  "name": "Lily Huang",
+  "pace": 8.1,
+  "usual_miles": 7,
+  "color": "#3a86ff",
+  "phone": "203-555-0131",
+  "bio": "Club member"
+ },
+ {
+  "id": 32,
+  "name": "Owen Murphy",
+  "pace": 10.1,
+  "usual_miles": 5,
+  "color": "#ff006e",
+  "phone": "203-555-0132",
+  "bio": "Club member"
+ },
+ {
+  "id": 33,
+  "name": "Carmen Vega",
+  "pace": 12.0,
+  "usual_miles": 3,
+  "color": "#fb5607",
+  "phone": "203-555-0133",
+  "bio": "Club member"
+ },
+ {
+  "id": 34,
+  "name": "Jake Thompson",
+  "pace": 9.3,
+  "usual_miles": 6,
+  "color": "#8338ec",
+  "phone": "203-555-0134",
+  "bio": "Club member"
+ },
+ {
+  "id": 35,
+  "name": "Ana Ruiz",
+  "pace": 8.6,
+  "usual_miles": 5,
+  "color": "#06d6a0",
+  "phone": "203-555-0135",
+  "bio": "Captain of Lakefront Night Owls"
+ },
+ {
+  "id": 36,
+  "name": "Tom Becker",
+  "pace": 9.7,
+  "usual_miles": 4,
+  "color": "#118ab2",
+  "phone": "203-555-0136",
+  "bio": "Club member"
+ },
+ {
+  "id": 37,
+  "name": "Yuki Tanaka",
+  "pace": 8.3,
+  "usual_miles": 6,
+  "color": "#e4572e",
+  "phone": "203-555-0137",
+  "bio": "Club member"
+ },
+ {
+  "id": 38,
+  "name": "Raj Mehta",
+  "pace": 10.8,
+  "usual_miles": 4,
+  "color": "#17bebb",
+  "phone": "203-555-0138",
+  "bio": "Club member"
+ },
+ {
+  "id": 39,
+  "name": "Elena Petrova",
+  "pace": 11.4,
+  "usual_miles": 3,
+  "color": "#ffc914",
+  "phone": "203-555-0139",
+  "bio": "Club member"
+ },
+ {
+  "id": 40,
+  "name": "Sam Okoro",
+  "pace": 7.9,
+  "usual_miles": 7,
+  "color": "#2e282a",
+  "phone": "203-555-0140",
+  "bio": "Club member"
+ },
+ {
+  "id": 41,
+  "name": "Hannah Weiss",
+  "pace": 9.1,
+  "usual_miles": 5,
+  "color": "#76b041",
+  "phone": "203-555-0141",
+  "bio": "Club member"
+ },
+ {
+  "id": 42,
+  "name": "Diego Castro",
+  "pace": 10.3,
+  "usual_miles": 5,
+  "color": "#7d5ba6",
+  "phone": "203-555-0142",
+  "bio": "Club member"
+ },
+ {
+  "id": 43,
+  "name": "Chris Moreno",
+  "pace": 10.0,
+  "usual_miles": 4,
+  "color": "#3a86ff",
+  "phone": "203-555-0143",
+  "bio": "Club member"
+ },
+ {
+  "id": 44,
+  "name": "Pat Quinn",
+  "pace": 9.4,
+  "usual_miles": 5,
+  "color": "#ff006e",
+  "phone": "203-555-0144",
+  "bio": "Club member"
  }
 ]
