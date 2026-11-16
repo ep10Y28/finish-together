@@ -126,6 +126,10 @@ p { margin: 0 0 10px; }
 .dir-map { height: 240px; margin: 14px 0; }
 .plan-map { height: 58vh; min-height: 300px; max-height: 560px; }
 .picker-map { height: 260px; margin: 8px 0; }
+.big-picker .picker-map { height: 360px; }
+@media (min-width: 1100px) { .big-picker .picker-map { height: 420px; } }
+.route-editor { margin: 10px 0; }
+.route-editor .row2 .btn { width: 100%; }
 .map-missing { display: grid; place-items: center; color: var(--muted); padding: 20px; text-align: center; }
 .leaflet-container { font: inherit; }
 /* Softer, neutral map so the colored routes stand out; dark mode inverts the tiles only. */
@@ -399,3 +403,17 @@ p { margin: 0 0 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* tappable pace groups and the group detail sheet */
+.group.tappable { cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
+.group.tappable:hover { box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+.group.tappable:active { transform: scale(.99); }
+.group.tappable:focus-visible { outline: 3px solid var(--g, var(--club)); outline-offset: 2px; }
+.group-more { margin-top: 8px; color: var(--g, var(--club)); font-weight: 700; }
+.group-sheet .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; padding-left: 10px; border-left: 4px solid var(--g); }
+.group-sheet .fields label { display: block; font-size: 12px; color: var(--muted); }
+.person-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 4px; }
+.person-row { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.person-name { font-weight: 700; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.person-name .pill { font-size: 11px; padding: 1px 8px; }
+.conflict-text { color: var(--maybe); }

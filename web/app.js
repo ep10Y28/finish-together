@@ -215,7 +215,7 @@ function mapPicker(initial, onChange) {
         if (!state.end) state.end = [state.start[0] + 0.01, state.start[1] + 0.012];
         state.mode = "end"; sync();
       } }, "Separate finish"));
-    help.textContent = `Tap the map to place the ${state.mode === "start" ? "start" : "finish"}.`;
+    help.textContent = `Tap anywhere on the map to put the ${state.mode === "start" ? "start" : "finish"} there, or search a place above.`;
     if (map) {
       for (const k of ["start", "end"]) { if (markers[k]) { map.removeLayer(markers[k]); markers[k] = null; } }
       markers.start = FT_MAP.pin(map, state.start, "Start", "start");
@@ -321,7 +321,7 @@ function newClubSheet() {
 function clubPage(slug, tab) {
   const view = $("view");
   let club = null, lastMsg = 0, lastEvent = 0, planKey = null, drawn = null, playing = null, latest = null, alive = true;
-  let planMap = null, settingsMap = null, drawSeq = 0;
+  let planMap = null, settingsMap = null, editMap = null, drawSeq = 0;
 
   const head = h("section", { class: "club-head" }, h("div", { class: "muted" }, "Loading…"));
   const tabs = h("nav", { class: "tabs", role: "tablist", "aria-label": "Club sections" });
@@ -337,6 +337,10 @@ function clubPage(slug, tab) {
   const mapNote = h("div", { class: "small muted grow" });
   const replayClock = h("span", { class: "replay-clock", hidden: true });
   const replayBtn = h("button", { class: "btn", onclick: () => startReplay() }, "▶ Watch the run");
+  const editBtn = h("button", { class: "btn", hidden: true, onclick: () => openEditor() }, "Edit start & finish");
+  const mapWrap = h("div", { class: "map-wrap" }, mapBox, replayClock);
+  const mapBar = h("div", { class: "map-bar" }, replayBtn, editBtn, mapNote);
+  const editor = h("div", { class: "card route-editor", hidden: true });
   const race = h("div", { class: "race" });
   const groupsBox = h("div", { class: "groups" });
   const planMeta = h("span", { class: "muted small" });
@@ -349,8 +353,7 @@ function clubPage(slug, tab) {
         h("div", { class: "stat" }, stats.groups, h("label", {}, "groups")),
         h("div", { class: "stat" }, stats.spread, h("label", {}, "min apart")))),
     targetNote,
-    h("div", { class: "map-wrap" }, mapBox, replayClock),
-    h("div", { class: "map-bar" }, replayBtn, mapNote),
+    mapWrap, mapBar, editor,
     h("div", { class: "panel-head" }, h("h2", {}, "The plan"), planMeta),
     race, groupsBox,
     h("p", { class: "small muted privacy" }, "Watch the run is a simulation drawn from the plan. Finish Together never tracks anyone's location."));
@@ -444,6 +447,8 @@ function clubPage(slug, tab) {
         h("span", { class: "chip" }, club.route_type === "point" ? `Finish: ${club.finish_name}` : "Loop back to start"),
         h("span", { class: "chip" }, club.target_mode === "distance" ? `${club.target_value} mi, middle group` : `${club.target_value} min`)));
     capControls.hidden = !me.is_captain;
+    editBtn.hidden = !me.is_captain;
+    if (!me.is_captain && !editor.hidden) closeEditor();
     drawTabs();
     drawClubTab();
   }
@@ -496,6 +501,45 @@ function clubPage(slug, tab) {
       toast(`${p.name.split(" ")[0]} ${decision === "approve" ? "approved" : "declined"}.`);
       loadClub();
     } catch (e) { toast(e.message); }
+  }
+
+  // ------------- captain: change the start and finish right on the Tonight map
+  function openEditor() {
+    if (!club || !club.me.is_captain) return;
+    if (playing) { playing.stop(); playing = null; replayClock.hidden = true; replayBtn.disabled = false; }
+    let pick = { start: [club.start_lat, club.start_lng], end: club.route_type === "point" ? [club.end_lat, club.end_lng] : null, routeType: club.route_type };
+    const startName = h("input", { value: club.start_name, maxlength: 60, required: true, "aria-label": "Meeting point name" });
+    const endName = h("input", { value: club.route_type === "point" ? (club.end_name || "") : "", maxlength: 60, placeholder: "e.g. Boathouse Row", "aria-label": "Finish name" });
+    const endLabel = h("label", { hidden: club.route_type !== "point" }, "Finish name", endName);
+    const picker = mapPicker(pick, (p) => { pick = p; endLabel.hidden = p.routeType !== "point"; });
+    picker.addEventListener("placename", (e) => { (e.detail.which === "end" ? endName : startName).value = e.detail.name; });
+    picker.classList.add("big-picker");
+    setTimeout(() => (editMap = picker._map), 80);
+    const save = h("button", { class: "btn primary", type: "submit" }, "Save and re-plan");
+    editor.replaceChildren(h("form", { class: "form", onsubmit: async (e) => {
+      e.preventDefault();
+      const body = { start_name: startName.value.trim() || "Start", start_lat: pick.start[0], start_lng: pick.start[1], route_type: pick.routeType };
+      if (pick.routeType === "point") Object.assign(body, { end_name: endName.value.trim() || "Finish", end_lat: pick.end[0], end_lng: pick.end[1] });
+      save.disabled = true;
+      try {
+        await api(`/api/clubs/${slug}`, { method: "PATCH", body });
+        closeEditor();
+        toast("Saved. The Run Director is updating tonight's plan.");
+        planKey = null; await loadClub(); poll();
+      } catch (err) { save.disabled = false; toast(err.message); }
+    } },
+      h("div", { class: "panel-head" }, h("h2", {}, "Start and finish"), h("span", { class: "muted small" }, "Only you see this, as captain")),
+      picker,
+      h("label", {}, "Meeting point name", startName), endLabel,
+      h("div", { class: "row2" }, h("button", { class: "btn", type: "button", onclick: closeEditor }, "Cancel"), save)));
+    mapWrap.hidden = true; mapBar.hidden = true; editor.hidden = false;
+    editor.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  function closeEditor() {
+    if (editMap) { editMap.remove(); editMap = null; }
+    editor.hidden = true; editor.replaceChildren();
+    mapWrap.hidden = false; mapBar.hidden = false;
+    setTimeout(() => planMap && planMap.invalidateSize(), 60);
   }
 
   function settingsCard() {
@@ -701,13 +745,48 @@ function clubPage(slug, tab) {
       requestAnimationFrame(() => (fill.style.width = `${(g.miles / maxMiles) * 100}%`));
     });
     if (!groups.length) { groupsBox.replaceChildren(h("div", { class: "empty" }, "No groups yet. Check in to get things going.")); return; }
-    groupsBox.replaceChildren(...groups.map((g, i) => h("div", { class: "group", style: `--g:${FT_MAP.groupColor(i)}` },
+    const canOpen = !!s.member;
+    groupsBox.replaceChildren(...groups.map((g, i) => h("div", { class: `group${canOpen ? " tappable" : ""}`, style: `--g:${FT_MAP.groupColor(i)}`,
+        ...(canOpen ? { role: "button", tabindex: "0", "aria-label": `Group ${g.id}: see who's running`,
+          onclick: () => groupSheet(g, i, plan),
+          onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); groupSheet(g, i, plan); } } } : {}) },
       h("div", { class: "group-top" },
         h("div", {}, h("div", { class: "group-title" }, `Group ${g.id}: ${g.pace_label}`),
           h("div", { class: "small muted" }, `${g.headcount} runners · ${g.miles} miles · about ${Math.round(g.minutes)} min`)),
         h("div", { class: "group-back" }, g.back_at)),
       h("div", { class: "members" }, g.members.flatMap((m) => [avatar(m.name, m.color, "xs"), ...Array.from({ length: m.guests || 0 }, () => avatar("+ 1", "#b8b1a7", "xs"))])),
+      canOpen ? h("div", { class: "group-more small" }, "See who's running ›") : null,
       ...((plan.conflicts || []).filter((c) => c.group === g.id).map((c) => h("div", { class: "conflict" }, `${c.name} wanted ${c.wanted_miles} mi; the Run Director's post has an option for them.`))))));
+  }
+
+  // Members only: who is in a pace group, with full names and today's pace and distance (never contact details).
+  function groupSheet(g, i, plan) {
+    const usual = new Map(((club && club.member_list) || []).map((m) => [m.id, m]));
+    const conflicts = (plan.conflicts || []).filter((c) => c.group === g.id);
+    const rows = g.members.map((m) => {
+      const u = usual.get(m.id);
+      const tags = [];
+      if (ME && m.id === ME.id) tags.push(h("span", { class: "pill in" }, "You"));
+      if (u && u.role === "captain") tags.push(h("span", { class: "pill cap" }, "Captain"));
+      const bits = [`Today ${fmtPace(m.pace)}/mi`, `wants ${m.miles} mi`];
+      if (u && Math.abs(u.pace - m.pace) >= 1 / 12) bits.push(`usually ${fmtPace(u.pace)}`);
+      const c = conflicts.find((x) => x.name === m.name);
+      return h("li", { class: "person-row" }, avatar(m.name, m.color),
+        h("div", { class: "grow" },
+          h("div", { class: "person-name" }, m.name, ...tags),
+          h("div", { class: "small muted" }, bits.join(" · ")),
+          m.guests ? h("div", { class: "small" }, `Bringing ${m.guests} ${m.guests === 1 ? "friend" : "friends"}`) : null,
+          c ? h("div", { class: "small conflict-text" }, `Wanted ${c.wanted_miles} mi; the Run Director suggested an add-on.`) : null));
+    });
+    const guests = g.members.reduce((n, m) => n + (m.guests || 0), 0);
+    openSheet(`Group ${g.id}: ${g.pace_label}`, h("div", { class: "group-sheet", style: `--g:${FT_MAP.groupColor(i)}` },
+      h("div", { class: "fields" },
+        h("div", {}, h("label", {}, "Runs"), h("b", {}, `${g.miles} mi`)),
+        h("div", {}, h("label", {}, "Time"), h("b", {}, `about ${Math.round(g.minutes)} min`)),
+        h("div", {}, h("label", {}, "Finishes"), h("b", {}, g.back_at)),
+        h("div", {}, h("label", {}, "People"), h("b", {}, `${g.headcount}${guests ? ` (${guests} guest${guests > 1 ? "s" : ""})` : ""}`))),
+      h("ul", { class: "person-list" }, rows),
+      h("p", { class: "small muted" }, "Only club members see this. Phone numbers and emails are never shown.")));
   }
 
   function renderTokens(s) {
@@ -760,6 +839,7 @@ function clubPage(slug, tab) {
     if (playing) playing.stop();
     if (planMap) planMap.remove();
     if (settingsMap) settingsMap.remove();
+    if (editMap) editMap.remove();
     document.documentElement.style.removeProperty("--club");
   };
 }

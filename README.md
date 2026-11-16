@@ -43,8 +43,8 @@ Open **http://localhost:8000**. You start signed in as Rae Simmons, captain of L
 | Who | What |
 |---|---|
 | **Anyone** | Browse clubs on a map, see each club's schedule, meeting point, finish and tonight's routes. Sign up with a name, usual pace and usual distance. Ask to join a club. Names, chat and the agent trace stay hidden until you're a member. |
-| **Members** | Check in for the next run: *I'm in / Maybe / Out*, **today's pace** (faster or slower than usual is fine), distance and friends coming. The check-in screen shows **the paces people already picked** and which group your pace would join. Or just chat: "in for 5 at 9:30, bringing a friend". |
-| **Club captain** (a person) | Approves or declines join requests. Sets the meeting point and, if the run doesn't loop back, a **separate finish** by tapping the map or searching a place. Chooses a **distance** target (the middle group runs about this far) or a **time** target (everyone runs this long). Can start a new club. |
+| **Members** | Check in for the next run: *I'm in / Maybe / Out*, **today's pace** (faster or slower than usual is fine), distance and friends coming. The check-in screen shows **the paces people already picked** and which group your pace would join. Or just chat: "in for 5 at 9:30, bringing a friend". Tap a pace group on the Tonight page to see who's in it, with full names, today's pace and distance, and friends coming. |
+| **Club captain** (a person) | Approves or declines join requests. Sets the meeting point and, if the run doesn't loop back, a **separate finish**, right on the Tonight map (**Edit start & finish**) or in the Club tab: tap the map or search a place, then **Save and re-plan**. Chooses a **distance** target (the middle group runs about this far) or a **time** target (everyone runs this long). Can start a new club. |
 
 Demo sign-in: tap your name at the top right to be anyone. The three seeded clubs (Philadelphia, New Haven, Chicago) and all 44 people are made up.
 
