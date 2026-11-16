@@ -48,7 +48,13 @@ def parse_pace(value):
 
 
 def describe_target(club):
-    if club["target_mode"] == "distance":
+    if (club.get("route_style") or "separate") == "staggered":
+        if club["target_mode"] == "distance":
+            t = f"{club['target_value']:g} miles for everyone, with staggered starts so all groups finish together"
+        else:
+            t = (f"about {club['target_value']:g} minutes for the slowest group, the same distance for everyone, "
+                 "with staggered starts")
+    elif club["target_mode"] == "distance":
         t = f"{club['target_value']:g} miles for the middle pace group, same finish time for everyone"
     else:
         t = f"{club['target_value']:g} minutes for everyone"
@@ -350,8 +356,12 @@ def route_builder(club_id, state, note=""):
         state["verified"] = v["ok"]
         return v
 
-    system = ("You are the Route Builder for a run club. Every group starts together and should get back "
-              f"at {finish_name(club)} at the same time, so faster groups run farther. The club captain set "
+    stagger = (club.get("route_style") or "separate") == "staggered"
+    how = ("Every group runs the same route and distance; the slowest group leaves first and build_routes gives "
+           "each group a start time so all groups finish together. Keep every group on the same distance."
+           if stagger else "Every group starts together, so faster groups run farther.")
+    system = ("You are the Route Builder for a run club. Every group should get back "
+              f"at {finish_name(club)} at the same time. {how} The club captain set "
               f"tonight's run to {describe_target(club)}. Call build_routes to give every group its distance. "
               "If a group's distance clearly doesn't suit it, you may adjust it with set_group_miles, as long as "
               "the groups still finish within a few minutes of each other. Always finish with verify_plan and "
@@ -360,7 +370,8 @@ def route_builder(club_id, state, note=""):
               "handles that. The map draws each group's route on real streets.")
     schemas = [
         tool("build_routes", "Give every group a distance that brings it back at the target time."),
-        tool("set_group_miles", "Hand-set one group's distance in miles (rounded to quarter miles).",
+        tool("set_group_miles", "Hand-set one group's distance in miles (rounded to quarter miles). "
+             "With staggered starts this sets the shared distance for every group.",
              {"group_id": {"type": "integer"}, "miles": {"type": "number"}}, ["group_id", "miles"]),
         tool("verify_plan", "Recheck every number and the finish-time spread."),
     ]
@@ -373,7 +384,8 @@ def compact(plan):
     return {"target_minutes": plan["target_minutes"], "back_at": plan.get("back_at"),
             "spread_minutes": plan["spread_minutes"],
             "groups": [{"group": g["id"], "pace": g["pace_label"], "headcount": g["headcount"],
-                        "miles": g["miles"], "back_at": g["back_at"]} for g in plan["groups"]],
+                        "miles": g["miles"], "starts_at": g.get("starts_at"), "back_at": g["back_at"]}
+                       for g in plan["groups"]],
             "conflicts": plan["conflicts"]}
 
 
@@ -425,9 +437,16 @@ def publish(club_id, state, reason, announcement):
         db.log_event(club_id, "Route Builder", "guard", note)
     db.save_plan(club_id, plan, reason)
     if plan["groups"]:
+        if (plan.get("route") or {}).get("style") == "staggered":
+            order = sorted(plan["groups"], key=lambda g: g.get("start_offset", 0))
+            starts = ", ".join(f"Group {g['id']} at {g['starts_at']}" for g in order)
+            body = (f"everyone runs {plan['groups'][0]['miles']:g} miles. Staggered starts: {starts}. "
+                    f"All at {finish_name(club)} by about {plan['back_at']}.")
+        else:
+            body = (f"everyone at {finish_name(club)} by about {plan['back_at']}. "
+                    "Faster groups run farther, so nobody waits.")
         text = announcement or (
-            f"Plan v{db.plan_count(club_id)}: {len(plan['groups'])} groups, everyone at "
-            f"{finish_name(club)} by about {plan['back_at']}. Faster groups run farther, so nobody waits."
+            f"Plan v{db.plan_count(club_id)}: {len(plan['groups'])} groups, {body}"
             + (f" {note}" if note else "") + conflict_tips(plan))
     else:
         text = "Nobody's in yet. First one to check in sets the tone."
@@ -462,7 +481,9 @@ def nudge_maybes(club_id, plan):
         names = [m["name"].split()[0] for m in best["members"]][:3]
         db.add_message(club_id, DIRECTOR,
                        f"{r['name'].split()[0]}, {best['headcount']} people at your pace are going "
-                       f"({', '.join(names)}). {best['miles']:g} miles, back by {best['back_at']}. Join them?",
+                       f"({', '.join(names)}). {best['miles']:g} miles"
+                       + (f", starting at {best['starts_at']}" if best.get("start_offset") else "")
+                       + f", back by {best['back_at']}. Join them?",
                        "nudge", to_runner=r["runner_id"])
         sent += 1
     return sent

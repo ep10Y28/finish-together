@@ -191,7 +191,7 @@ class ClubFields(BaseModel):
     target_mode: str | None = None         # "time" or "distance"
     target_value: float | None = None
     schedule: list[dict] | None = None
-    route_style: str | None = None         # "separate" or "together"
+    route_style: str | None = None         # "separate", "together" or "staggered"
 
 
 def _point(lat, lng, what):
@@ -237,8 +237,8 @@ def clean_settings(fields, club=None):
         out["run_time"] = fields["run_time"]
     style = fields.get("route_style")
     if style is not None:
-        if style not in ("separate", "together"):
-            raise HTTPException(400, "Choose separate routes or run together.")
+        if style not in ("separate", "together", "staggered"):
+            raise HTTPException(400, "Choose separate routes, run together or staggered start.")
         out["route_style"] = style
     mode = fields.get("target_mode")
     if mode is not None and mode not in ("time", "distance"):
@@ -402,8 +402,9 @@ def update_club(slug: str, body: ClubFields, x_user_id: str | None = Header(None
     if "run_time" in fields:
         what.append(f"start time is {tools.clock(0, new['run_time'])}")
     if "route_style" in fields and fields["route_style"] != (c.get("route_style") or "separate"):
-        what.append("groups start together on one shared route and faster groups add a short out-and-back"
-                    if fields["route_style"] == "together" else "each group gets its own route again")
+        what.append({"together": "groups start together on one shared route and faster groups add a short out-and-back",
+                     "staggered": "everyone runs the same route and distance, and the slowest group starts first"}
+                    .get(fields["route_style"], "each group gets its own route again"))
     if "run_day" in fields and fields["run_day"] != c["run_day"]:
         db.set_run_date(c["id"], runs.next_regular(new, runs.today()))
         what.append(f"the run is on {new['run_day']}s, next on {runs.label(db.run_date(c['id']))}")

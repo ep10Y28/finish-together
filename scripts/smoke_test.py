@@ -134,6 +134,14 @@ with TestClient(app) as c:
     assert c.patch("/api/clubs/last-lap", headers=CAPTAIN, json={"route_style": "together"}).status_code == 200
     wait_for_director()
     assert db_plan_style() == "together"
+    assert c.patch("/api/clubs/last-lap", headers=CAPTAIN, json={"route_style": "staggered"}).status_code == 200
+    wait_for_director()
+    from app import db
+    stag = db.latest_plan(db.club("last-lap")["id"])
+    assert stag["route"]["style"] == "staggered" and len({g["miles"] for g in stag["groups"]}) == 1, "staggered: one distance"
+    offs = sorted(g["start_offset"] for g in stag["groups"])
+    assert offs[0] == 0 and (len(offs) == 1 or offs[-1] > 0), "staggered: faster groups start later"
+    assert stag["spread_minutes"] <= 1, "staggered: groups should finish within a minute"
     done = c.post("/api/clubs/last-lap/finish", headers=CAPTAIN).json()
     assert done["logged"] and done["next"] == later
     mine = c.get("/api/clubs/last-lap/state", headers=RUNNER).json()["my_checkin"]
@@ -143,5 +151,5 @@ with TestClient(app) as c:
     print(f"OK: loop plan {loop_msg}; point-to-point plan {len(plan['groups'])} groups, "
           f"{plan['spread_minutes']} min apart; casual check-in understood; injection blocked; member approval enforced; "
           "feedback, Scout review, captain controls, "
-          "run-together routes, sign-ups ahead and the past-run log work.")
+          "run-together and staggered-start routes, sign-ups ahead and the past-run log work.")
 config.DB_PATH.unlink(missing_ok=True)

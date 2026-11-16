@@ -238,10 +238,12 @@ const FT_MAP = (() => {
     }
     const together = plan.route && plan.route.style === "together" && plan.groups.length > 1;
     if (together) return drawTogether(map, plan, layers, start, end, idx, bounds, onNote, safetyGrid);
+    const staggered = plan.route && plan.route.style === "staggered";
     const routes = [];
+    let shared = null;                               // staggered start: one route, every group runs it
     for (let i = 0; i < plan.groups.length; i++) {   // one at a time, to be polite to the free router
       const g = plan.groups[i];
-      const r = await route(start, end, g.miles, shape, idx);
+      const r = staggered ? (shared = shared || await route(start, end, g.miles, shape, idx)) : await route(start, end, g.miles, shape, idx);
       routes.push({ group: g, i, pts: r.pts, miles: r.miles, color: groupColor(i), street: r.street,
                     turns: r.turns, risk: r.risk, riskLabel: riskLabel(r.risk), turnaround: r.turnaround });
       r.pts.forEach((p) => bounds.extend(p));
@@ -263,12 +265,13 @@ const FT_MAP = (() => {
     });
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 15 });
     const sketched = routes.some((r) => !r.street);
-    if (onNote) onNote(sketched
-      ? "Street routing couldn't be reached, so routes are sketched as straight lines (dashed)."
-      : `Routes keep to long straight streets with few turns${end ? "" : "; each group turns around at its numbered flag"}. `
+    if (onNote) onNote((sketched ? "Street routing couldn't be reached, so routes are sketched as straight lines (dashed). " : "")
+      + (staggered ? "Staggered start: every group runs this same route. The slowest group leaves first and each group starts at its own time, so all groups finish together. "
+                   + (idx ? "The route avoids streets with more violent incidents in the last 12 months (Philadelphia police data)." : (safetyGrid && safetyGrid.note) || "")
+      : sketched ? "" : `Routes keep to long straight streets with few turns${end ? "" : "; each group turns around at its numbered flag"}. `
         + (idx ? "They also avoid streets with more violent incidents in the last 12 months (Philadelphia police data)."
-               : (safetyGrid && safetyGrid.note) || "No street safety data here."));
-    return { layers, routes };
+               : (safetyGrid && safetyGrid.note) || "No street safety data here.")));
+    return { layers, routes, staggered };
   }
 
   // "Run together": every group runs one shared route, the slowest group's distance. The first stretch has no
@@ -362,15 +365,15 @@ const FT_MAP = (() => {
         const dot = L.circleMarker(r.pts[0], { radius: 6, color: "#fff", weight: 2, fillColor: p.color, fillOpacity: 1 })
           .addTo(dots).bindTooltip(p.name);
         // a little spread inside each group so the dots don't stack
-        runners.push({ dot, pts: r.pts, minutes: r.group.minutes * (1 + (k % 3 - 1) * 0.012) });
+        runners.push({ dot, pts: r.pts, off: r.group.start_offset || 0, minutes: r.group.minutes * (1 + (k % 3 - 1) * 0.012) });
       });
     });
-    const runMinutes = Math.max(...drawn.routes.map((r) => r.group.minutes), 1) * 1.03;
+    const runMinutes = Math.max(...drawn.routes.map((r) => (r.group.start_offset || 0) + r.group.minutes), 1) * 1.03;
     const t0 = performance.now();
     let raf;
     const frame = (now) => {
       const m = Math.min(runMinutes, ((now - t0) / 1000 / seconds) * runMinutes);
-      runners.forEach((r) => r.dot.setLatLng(along(r.pts, m / r.minutes)));
+      runners.forEach((r) => r.dot.setLatLng(along(r.pts, (m - r.off) / r.minutes)));   // waits at the start until its group's time
       onTick(m, m >= runMinutes);
       if (m < runMinutes) raf = requestAnimationFrame(frame);
     };

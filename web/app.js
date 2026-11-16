@@ -340,8 +340,8 @@ function mapPicker(initial, onChange) {
   return wrap;
 }
 
-function targetPicker(mode, value) {
-  const st = { mode };
+function targetPicker(mode, value, style) {
+  const st = { mode, style: style || "separate" };
   const input = h("input", { type: "number", required: true, inputmode: "decimal", "aria-label": "Distance or time" });
   const unit = h("span", { class: "unit" });
   const hint = h("div", { class: "small muted" });
@@ -352,16 +352,20 @@ function targetPicker(mode, value) {
       h("button", { type: "button", class: st.mode === "time" ? "on" : "", onclick: () => { if (st.mode !== "time") input.value = 45; st.mode = "time"; sync(); } }, "By time"));
     if (st.mode === "distance") {
       Object.assign(input, { min: 1, max: 20, step: 0.5 }); unit.textContent = "miles";
-      hint.textContent = "The middle pace group runs this far. Faster groups run farther, slower groups less, and everyone finishes together.";
+      hint.textContent = st.style === "staggered"
+        ? "Everyone runs this far. The slowest group starts first, so everyone finishes together."
+        : "The middle pace group runs this far. Faster groups run farther, slower groups less, and everyone finishes together.";
     } else {
       Object.assign(input, { min: 15, max: 150, step: 5 }); unit.textContent = "minutes";
-      hint.textContent = "Everyone runs for this long. Faster groups cover more ground.";
+      hint.textContent = st.style === "staggered"
+        ? "The slowest group runs for about this long. Everyone runs the same distance, and faster groups start later."
+        : "Everyone runs for this long. Faster groups cover more ground.";
     }
   };
   input.value = value;
   sync();
   return { node: h("div", { class: "target" }, h("div", { class: "label" }, "Distance or time"), seg, h("div", { class: "with-unit" }, input, unit), hint),
-           value: () => ({ target_mode: st.mode, target_value: +input.value }) };
+           value: () => ({ target_mode: st.mode, target_value: +input.value }), setStyle: (v) => { st.style = v; sync(); } };
 }
 
 // ---------------------------------------------------------------- start a club
@@ -472,17 +476,19 @@ async function adminPage() {
   load();
 }
 
-// Route style: separate routes (default) or run together (one shared route, faster groups add out-and-backs).
-function stylePicker(value) {
+// Route style: separate routes (default), run together (one shared route, faster groups add out-and-backs)
+// or staggered start (same route and distance for everyone, the slowest group leaves first).
+function stylePicker(value, onChange) {
   let v = value;
   const seg = h("div", { class: "seg" });
   const hint = h("div", { class: "small muted" });
   const paint = () => {
-    seg.replaceChildren(...[["separate", "Separate routes"], ["together", "Run together"]].map(([k, label]) =>
-      h("button", { type: "button", class: v === k ? "on" : "", "aria-pressed": v === k ? "true" : "false", onclick: () => { v = k; paint(); } }, label)));
-    hint.textContent = v === "together"
-      ? "Everyone starts as one pack on a shared route. Faster groups split off at a numbered flag for a short out-and-back and rejoin, so all groups finish together."
-      : "Each group runs the same simple shape and turns around at its own flag.";
+    seg.replaceChildren(...[["separate", "Separate routes"], ["together", "Run together"], ["staggered", "Staggered start"]].map(([k, label]) =>
+      h("button", { type: "button", class: v === k ? "on" : "", "aria-pressed": v === k ? "true" : "false", onclick: () => { v = k; paint(); if (onChange) onChange(v); } }, label)));
+    hint.textContent = {
+      together: "Everyone starts as one pack on a shared route. Faster groups split off at a numbered flag for a short out-and-back and rejoin, so all groups finish together.",
+      staggered: "Everyone runs the same route and distance. The slowest group leaves first and each faster group starts a few minutes later, so all groups finish together.",
+    }[v] || "Each group runs the same simple shape and turns around at its own flag.";
   };
   paint();
   return { node: h("div", { class: "target" }, h("div", { class: "label" }, "Route style"), seg, hint), value: () => v };
@@ -888,8 +894,8 @@ function clubPage(slug, tab) {
     let pick = currentPick();
     const picker = mapPicker(pick, (p) => { pick = p; });
     picker.classList.add("big-picker");
-    const target = targetPicker(club.target_mode, club.target_value);
-    const style = stylePicker(club.route_style || "separate");
+    const target = targetPicker(club.target_mode, club.target_value, club.route_style);
+    const style = stylePicker(club.route_style || "separate", (v) => target.setStyle(v));
     setTimeout(() => (editMap = picker._map), 80);
     const save = h("button", { class: "btn primary", type: "submit" }, "Save and re-plan");
     editor.replaceChildren(h("form", { class: "form", onsubmit: async (e) => {
@@ -1151,7 +1157,7 @@ function clubPage(slug, tab) {
     const maxMiles = Math.max(1, ...groups.map((g) => g.miles));
     groups.forEach((g, i) => {
       const fill = h("div", { class: "fill", style: `background:${FT_MAP.groupColor(i)}` });
-      race.appendChild(h("div", { class: "lane" }, h("div", {}, `Group ${g.id} · ${g.miles} mi`), h("div", { class: "track" }, fill), h("div", { class: "flag" }, g.back_at)));
+      race.appendChild(h("div", { class: "lane" }, h("div", {}, `Group ${g.id} · ${g.miles} mi${g.start_offset ? ` · starts ${g.starts_at}` : ""}`), h("div", { class: "track" }, fill), h("div", { class: "flag" }, g.back_at)));
       requestAnimationFrame(() => (fill.style.width = `${(g.miles / maxMiles) * 100}%`));
     });
     if (!groups.length) { groupsBox.replaceChildren(h("div", { class: "empty" }, "No groups yet. Check in to get things going.")); return; }
@@ -1162,7 +1168,8 @@ function clubPage(slug, tab) {
           onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); groupSheet(g, i, plan); } } } : {}) },
       h("div", { class: "group-top" },
         h("div", {}, h("div", { class: "group-title" }, `Group ${g.id}: ${g.pace_label}`),
-          h("div", { class: "small muted" }, `${g.headcount} runners · ${g.miles} miles · about ${Math.round(g.minutes)} min`)),
+          h("div", { class: "small muted" }, `${g.headcount} runners · ${g.miles} miles · about ${Math.round(g.minutes)} min`),
+          plan.route && plan.route.style === "staggered" ? h("div", { class: "group-start" }, `Starts ${g.starts_at}${g.start_offset ? "" : " (first off)"}`) : null),
         h("div", { class: "group-back" }, g.back_at)),
       h("div", { class: "members" }, g.members.flatMap((m) => [avatar(m.name, m.color, "xs"), ...Array.from({ length: m.guests || 0 }, () => avatar("+ 1", "#b8b1a7", "xs"))])),
       h("div", { class: "group-route small muted", "data-g": g.id, hidden: true }),
@@ -1231,9 +1238,11 @@ function clubPage(slug, tab) {
       h("div", { class: "fields" },
         h("div", {}, h("label", {}, "Runs"), h("b", {}, `${g.miles} mi`)),
         h("div", {}, h("label", {}, "Time"), h("b", {}, `about ${Math.round(g.minutes)} min`)),
+        plan.route && plan.route.style === "staggered" ? h("div", {}, h("label", {}, "Starts"), h("b", {}, g.starts_at)) : null,
         h("div", {}, h("label", {}, "Finishes"), h("b", {}, g.back_at)),
         h("div", {}, h("label", {}, "People"), h("b", {}, `${g.headcount}${guests ? ` (${guests} guest${guests > 1 ? "s" : ""})` : ""}`))),
       (() => { const r = drawn && drawn.routes.find((x) => x.group.id === g.id);
+        if (r && drawn.staggered) return h("p", { class: "small" }, `Route: the same route as every group, ${g.miles} mi. Meet at the start with everyone, set off at ${g.starts_at}, and finish together.`);
         if (r && drawn.together) return h("p", { class: "small" }, r.split
           ? `Route: runs the shared route with everyone, splits off at flag ${g.id} for a ${addOn(r)} mi out-and-back, then rejoins and finishes with the club.`
           : "Route: the shared route, start to finish. Faster groups split off for add-ons and come back to you.");

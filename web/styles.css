@@ -498,3 +498,4 @@ button.member { width: 100%; text-align: left; font: inherit; color: inherit; ba
 .past-group { padding: 8px 0; border-top: 1px solid var(--line); }
 .past-group-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; flex-wrap: wrap; }
 .group-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.group-start { margin-top: 4px; display: inline-block; font-size: 13px; font-weight: 700; color: var(--g); background: color-mix(in srgb, var(--g) 12%, transparent); border-radius: 999px; padding: 2px 9px; }

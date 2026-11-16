@@ -165,13 +165,36 @@ def build_routes(groups, club):
         note = (f"The finish is about {floor:g} miles away, so the run was stretched from {target} to "
                 f"{new} minutes for the slowest group to make it.")
         target = new
+    if (club.get("route_style") or "separate") == "staggered":
+        # Staggered start: everyone runs the same distance and the slowest group leaves first.
+        if (club.get("target_mode") or "time") == "distance":
+            miles = max(floor, round(float(club.get("target_value") or 3), 2))   # keep a 3.1 mi 5K as 3.1
+        else:
+            miles = _quarter(target / slowest, floor)
+        planned = [_with_route(g, miles, run_time) for g in groups]
+        return finish(planned, round(miles * slowest), club, note)
     planned = [_with_route(g, _quarter(target / g["pace"], floor), run_time) for g in groups]
     return finish(planned, target, club, note)
 
 
+def _stagger(planned, run_time):
+    """Give each group a start time so all groups finish together: the slowest group leaves first."""
+    longest = max(g["minutes"] for g in planned)
+    out = []
+    for g in planned:
+        off = int(round(longest - g["minutes"]))
+        g = dict(g, start_offset=off, starts_at=clock(off, run_time), back_at=clock(off + g["minutes"], run_time))
+        out.append(g)
+    return out
+
+
 def finish(planned, target, club, note=None):
     run_time = club.get("run_time", "18:30")
-    times = [g["minutes"] for g in planned]
+    if (club.get("route_style") or "separate") == "staggered":
+        planned = _stagger(planned, run_time)
+    else:
+        planned = [dict(g, start_offset=0, starts_at=clock(0, run_time)) for g in planned]
+    times = [g["start_offset"] + g["minutes"] for g in planned]
     conflicts = []
     for g in planned:
         for m in g["members"]:
@@ -199,8 +222,9 @@ def set_group_miles(plan, group_id, miles, club):
         return None, f"the finish is {min_miles(club):g} miles away; no group can run less than that"
     if not any(g["id"] == group_id for g in plan["groups"]):
         return None, f"no group {group_id}"
+    same = (club.get("route_style") or "separate") == "staggered"   # staggered: one distance for everyone
     groups = [(_with_route(g, _quarter(miles, min_miles(club)), club.get("run_time", "18:30"))
-               if g["id"] == group_id else g) for g in plan["groups"]]
+               if same or g["id"] == group_id else g) for g in plan["groups"]]
     return finish(groups, plan["target_minutes"], club, (plan.get("target") or {}).get("note")), None
 
 
@@ -217,6 +241,8 @@ def verify_plan(plan, tolerance_minutes=config.MAX_FINISH_SPREAD):
         real_min = round(g["miles"] * g["pace"], 1)
         if abs(real_min - g["minutes"]) > 0.5:
             errors.append(f"Group {g['id']}: says {g['minutes']} min, math says {real_min}")
+    if (plan.get("route") or {}).get("style") == "staggered" and len({g["miles"] for g in plan.get("groups", [])}) > 1:
+        errors.append("Staggered start: every group must run the same distance")
     if plan.get("groups") and plan.get("spread_minutes", 0) > tolerance_minutes:
         errors.append(f"Groups come back {plan['spread_minutes']} min apart, limit is {tolerance_minutes}")
     return {"ok": not errors, "errors": errors}
