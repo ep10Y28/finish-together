@@ -459,13 +459,7 @@ def conflict_tips(plan, limit=2):
     tips = []
     for c in plan["conflicts"][:limit]:
         first = c["name"].split()[0]
-        gap = c["wanted_miles"] - c["group_miles"]
-        if gap > 0:
-            tips.append(f" {first}, you wanted {c['wanted_miles']:g} mi: add a {gap:.1f} mi out-and-back "
-                        f"before the start, or hop up a group.")
-        else:
-            tips.append(f" {first}, your group runs {c['group_miles']:g} mi: peel off early on the way back "
-                        f"and save everyone a spot.")
+        tips.append(f" {first}, your group runs {c['group_miles']:g} mi: {c.get('option') or 'ask the captain for an add-on'}.")
     return "".join(tips)
 
 
@@ -545,7 +539,8 @@ def live_director(club_id, state, reason):
         "who comes has a group at their pace and every group finishes at the same time. When something "
         "changes, decide whether the plan needs redoing. If it does: ask_group_planner, then "
         "ask_route_builder, then settle conflicts (someone who wants much more or less than their group "
-        "runs: say in the announcement what they can do, like a short add-on or another group), then "
+        "runs: each conflict the Route Builder returns carries an option that works on tonight's route; "
+        "pass it on by first name in the announcement), then "
         "post_plan with a short, upbeat announcement of two or three sentences that names the return "
         "time, and finally nudge_maybe_runners. If nothing important changed, call skip_replan. "
         "Never make up distances or times; use what the tools return. Notes to the Group Planner and Route "

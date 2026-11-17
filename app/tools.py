@@ -200,7 +200,8 @@ def finish(planned, target, club, note=None):
         for m in g["members"]:
             if abs(m["miles"] - g["miles"]) >= 1.5:
                 conflicts.append({"runner_id": m["id"], "name": m["name"], "group": g["id"],
-                                  "wanted_miles": m["miles"], "group_miles": g["miles"]})
+                                  "wanted_miles": m["miles"], "group_miles": g["miles"],
+                                  "option": conflict_option(m["miles"], g["miles"], club)})
     return {
         "groups": planned,
         "target_minutes": target,
@@ -211,6 +212,23 @@ def finish(planned, target, club, note=None):
         "spread_minutes": round(max(times) - min(times), 1),
         "conflicts": conflicts,
     }
+
+
+def _mi(x):
+    return f"{round(x, 1):g}"
+
+
+def conflict_option(wanted, group_miles, club):
+    """One concrete thing a runner can do when they want a different distance from their group's."""
+    if wanted > group_miles:
+        return (f"add a {_mi(wanted - group_miles)} mi out-and-back before the start or after the finish "
+                f"for {_mi(wanted)} mi")
+    if is_point_to_point(club):
+        floor = min_miles(club)
+        if wanted < floor:
+            return f"the finish is about {_mi(floor)} mi away, so the shortest way is {_mi(floor)} mi straight there"
+        return f"skip the extra loop and head straight to the finish for about {_mi(floor)} mi"
+    return f"turn back at the {_mi(wanted / 2)} mi mark for {_mi(wanted)} mi and wait at the finish"
 
 
 def set_group_miles(plan, group_id, miles, club):

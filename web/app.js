@@ -1088,7 +1088,9 @@ function clubPage(slug, tab) {
       if (!el) return;
       const bits = [];
       if (drawn.together) bits.push(r.split ? `shared route, then a ${addOn(r)} mi add-on at flag ${r.group.id}` : "shared route only");
-      if (r.street && r.turns !== null) bits.push(`${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? " plus the turnaround" : ""}`);
+      if (r.street && r.turns !== null) bits.push(r.eachWay
+        ? `${r.turns} ${r.turns === 1 ? "turn" : "turns"} each way, back the same streets`
+        : `${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? " plus the turnaround" : ""}`);
       if (r.riskLabel) bits.push(r.riskLabel);
       el.textContent = bits.length ? `Route: ${bits.join(" · ")}` : "";
       el.hidden = !bits.length;
@@ -1174,7 +1176,7 @@ function clubPage(slug, tab) {
       h("div", { class: "members" }, g.members.flatMap((m) => [avatar(m.name, m.color, "xs"), ...Array.from({ length: m.guests || 0 }, () => avatar("+ 1", "#b8b1a7", "xs"))])),
       h("div", { class: "group-route small muted", "data-g": g.id, hidden: true }),
       canOpen ? h("div", { class: "group-more small" }, "See who's running ›") : null,
-      ...((plan.conflicts || []).filter((c) => c.group === g.id).map((c) => h("div", { class: "conflict" }, `${c.name} wanted ${c.wanted_miles} mi; the Run Director's post has an option for them.`))))));
+      ...((plan.conflicts || []).filter((c) => c.group === g.id).map((c) => h("div", { class: "conflict" }, `${c.name.split(" ")[0]} wanted ${c.wanted_miles} mi: ${c.option || "see the Run Director's post"}.`))))));
     showRouteInfo();
   }
 
@@ -1231,7 +1233,7 @@ function clubPage(slug, tab) {
           h("div", { class: "person-name" }, m.name, ...tags),
           h("div", { class: "small muted" }, bits.join(" · ")),
           m.guests ? h("div", { class: "small" }, `Bringing ${m.guests} ${m.guests === 1 ? "friend" : "friends"}`) : null,
-          c ? h("div", { class: "small conflict-text" }, `Wanted ${c.wanted_miles} mi; the Run Director suggested an add-on.`) : null));
+          c ? h("div", { class: "small conflict-text" }, `Wanted ${c.wanted_miles} mi: ${c.option || "see the Run Director's post"}.`) : null));
     });
     const guests = g.members.reduce((n, m) => n + (m.guests || 0), 0);
     openSheet(`Group ${g.id}: ${g.pace_label}`, h("div", { class: "group-sheet", style: `--g:${FT_MAP.groupColor(i)}` },
@@ -1247,7 +1249,9 @@ function clubPage(slug, tab) {
           ? `Route: runs the shared route with everyone, splits off at flag ${g.id} for a ${addOn(r)} mi out-and-back, then rejoins and finishes with the club.`
           : "Route: the shared route, start to finish. Faster groups split off for add-ons and come back to you.");
         if (!r || !r.street) return null;
-        return h("p", { class: "small" }, `Route: ${r.miles.toFixed(1)} mi on the streets, ${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? ", turn around at the flag marked " + g.id : ""}${r.riskLabel ? `, ${r.riskLabel}` : ""}.`); })(),
+        return h("p", { class: "small" }, r.eachWay
+          ? `Route: ${r.miles.toFixed(1)} mi on the streets. Head out the same way as everyone (${r.turns} ${r.turns === 1 ? "turn" : "turns"}), turn around at the flag marked ${g.id} and come back the same way${r.riskLabel ? `; ${r.riskLabel}` : ""}.`
+          : `Route: ${r.miles.toFixed(1)} mi on the streets, ${r.turns} ${r.turns === 1 ? "turn" : "turns"}${r.turnaround ? ", turn around at the flag marked " + g.id : ""}${r.riskLabel ? `, ${r.riskLabel}` : ""}.`); })(),
       h("ul", { class: "person-list" }, rows),
       h("p", { class: "small muted" }, "Only club members see this. Phone numbers and emails are never shown.")));
   }

@@ -55,7 +55,7 @@ const FT_MAP = (() => {
   // wide detour to one side. The router then follows real streets between those points.
   // Loop candidates: out and back along 8 compass bearings. Point candidates: the four shapes.
   function shapes(start, end) {
-    if (!end) return [0, 45, 90, 135, 180, 225, 270, 315].map((b) => ({ kind: "outback", bearing: b }));
+    if (!end) return Array.from({ length: 16 }, (_, k) => ({ kind: "outback", bearing: k * 22.5 }));
     return [{ kind: "overshoot" }, { kind: "backtrack" }, { kind: "detour", side: 90 }, { kind: "detour", side: -90 }];
   }
   function waypoints(start, end, straight, shape) {
@@ -77,15 +77,21 @@ const FT_MAP = (() => {
     return [start, dest(mid, b + shape.side, h), end];
   }
 
-  // A turn is a left or right (not a slight bend) or a roundabout; leaving and arriving don't count.
-  function countTurns(r) {
-    let n = 0;
+  // A turn is a real change of direction (45 degrees or more) or a roundabout. A street changing its name,
+  // a gentle bend or a fork that keeps you going the same way is not a turn. Returns where each turn is, in miles.
+  function turnsAlong(r) {
+    const at = [];
+    let d = 0;
     for (const leg of r.legs || []) for (const st of leg.steps || []) {
-      const t = st.maneuver.type, m = st.maneuver.modifier || "";
-      if (t === "depart" || t === "arrive") continue;
-      if (t === "roundabout" || t === "rotary" || (/left|right|uturn/.test(m) && !/slight/.test(m))) n++;
+      const mv = st.maneuver || {}, t = mv.type;
+      if (t !== "depart" && t !== "arrive") {
+        const b0 = mv.bearing_before, b1 = mv.bearing_after;
+        const delta = b0 === undefined || b1 === undefined ? 0 : Math.abs(((b1 - b0 + 540) % 360) - 180);
+        if (t === "roundabout" || t === "rotary" || delta >= 45) at.push(d / MI);
+      }
+      d += st.distance || 0;
     }
-    return n;
+    return at;
   }
 
   async function osrm(pts) {
@@ -98,8 +104,9 @@ const FT_MAP = (() => {
       const j = await r.json();
       if (j.code !== "Ok" || !j.routes || !j.routes.length) throw new Error("no route");
       const best = j.routes[0];
+      const turnAt = turnsAlong(best);
       return { pts: best.geometry.coordinates.map(([lng, lat]) => [lat, lng]), miles: best.distance / MI,
-               turns: countTurns(best),
+               turns: turnAt.length, turnAt,
                turnaround: pts.length === 3 && j.waypoints && j.waypoints[1] ? [j.waypoints[1].location[1], j.waypoints[1].location[0]] : null };
     } finally {
       clearTimeout(t);
@@ -147,6 +154,41 @@ const FT_MAP = (() => {
     return got.turns / Math.max(got.miles, 0.5) + Math.max(0, err - 0.08) * 10 + (risk === null ? 0 : risk * 1.2);
   }
 
+  // ---------- loops: out and back the same way along one corridor ----------
+  // The router finds the way out along one heading; every group runs the start of that same way out, turns
+  // around at its own point and comes back on the same streets. So each group's turns on the way back are the
+  // turns on the way out, nobody needs a second set of directions, and the distance comes out exact.
+  const corridorCache = new Map();
+  async function corridor(start, bearingDeg, reach) {
+    const key = JSON.stringify([start, bearingDeg, Math.round(reach * 10) / 10]);
+    if (corridorCache.has(key)) return corridorCache.get(key);
+    let straight = reach / STREET_FACTOR, best = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const got = await osrm([start, dest(start, bearingDeg, straight)]);
+      got.len = lineMiles(got.pts);
+      if (!best || got.len > best.len) best = got;
+      if (got.len >= reach) break;
+      straight *= (reach / Math.max(got.len, 0.05)) * 1.05;   // the way out came up short: aim farther
+    }
+    corridorCache.set(key, best);
+    return best;
+  }
+  function outAndBack(c, miles) {
+    const half = miles / 2;
+    if (!c || c.len < half * 0.97) return null;
+    const [out] = splitAt(c.pts, Math.min(1, half / c.len));
+    const pts = [...out, ...out.slice(0, -1).reverse()];
+    const turns = (c.turnAt || []).filter((d) => d < half - 0.01).length;
+    return { pts, miles: lineMiles(pts), turns, eachWay: true, turnaround: out[out.length - 1] };
+  }
+  // Lower is better for a loop: fewest turns each way (anything over 9 costs extra), close to the distance,
+  // quieter streets where the data exists.
+  function loopScore(ob, target, risk) {
+    if (!ob) return Infinity;
+    const err = Math.abs(ob.miles - target) / target;
+    return ob.turns + Math.max(0, ob.turns - 9) * 3 + Math.max(0, err - 0.05) * 20 + (risk === null ? 0 : risk * 1.5);
+  }
+
   const shapeCache = new Map();
   async function pickShape(start, end, miles, idx) {
     const key = JSON.stringify([start, end, Math.round(miles * 2) / 2, !!idx]);
@@ -154,14 +196,21 @@ const FT_MAP = (() => {
     let best = null;
     for (const shape of shapes(start, end)) {
       try {
-        const got = await osrm(waypoints(start, end, miles / STREET_FACTOR, shape));
-        const s = score(got, miles, riskOf(got.pts, idx));
+        let s;
+        if (shape.kind === "outback") {
+          const ob = outAndBack(await corridor(start, shape.bearing, miles / 2), miles);
+          s = loopScore(ob, miles, ob ? riskOf(ob.pts, idx) : null);
+        } else {
+          const got = await osrm(waypoints(start, end, miles / STREET_FACTOR, shape));
+          s = score(got, miles, riskOf(got.pts, idx));
+        }
         if (!best || s < best.s) best = { shape, s };
       } catch (e) {
         if (!best) throw e;                       // the router is down: stop trying shapes
       }
     }
-    const shape = best ? best.shape : end ? { kind: "detour", side: 90 } : { kind: "outback", bearing: 45 };
+    const picked = best ? best.shape : end ? { kind: "detour", side: 90 } : { kind: "outback", bearing: 45 };
+    const shape = picked.kind === "outback" ? { ...picked, reach: miles / 2 } : picked;   // every group uses the same way out
     shapeCache.set(key, shape);
     return shape;
   }
@@ -172,6 +221,15 @@ const FT_MAP = (() => {
     if (cache.has(key)) return cache.get(key);
     let straight = miles / STREET_FACTOR;
     let best = null;
+    if (!routerDown && !end && shape.kind === "outback") {
+      try {
+        const ob = outAndBack(await corridor(start, shape.bearing, Math.max(shape.reach || 0, miles / 2)), miles);
+        if (ob) { const out = { ...ob, street: true, risk: riskOf(ob.pts, idx) }; cache.set(key, out); return out; }
+      } catch (e) {
+        routerDown = true;
+        console.warn("Street routing unavailable, drawing approximate shapes.", e);
+      }
+    }
     if (!routerDown) {
       try {
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -254,7 +312,7 @@ const FT_MAP = (() => {
       const w = Math.max(3, 11 - k * 2);
       const line = L.polyline(r.pts, { color: r.color, weight: w, opacity: 0.9, dashArray: r.street ? null : "8 8" }).addTo(layers);
       const bits = [`Group ${r.group.id}: ${r.group.miles} mi plan`];
-      if (r.street) bits.push(`${r.miles.toFixed(1)} mi on these streets`, `${r.turns} turns`);
+      if (r.street) bits.push(`${r.miles.toFixed(1)} mi on these streets`, r.eachWay ? `${r.turns} turns each way` : `${r.turns} turns`);
       else bits.push("sketch");
       if (r.riskLabel) bits.push(r.riskLabel);
       line.bindTooltip(bits.join(", "));
@@ -268,7 +326,7 @@ const FT_MAP = (() => {
     if (onNote) onNote((sketched ? "Street routing couldn't be reached, so routes are sketched as straight lines (dashed). " : "")
       + (staggered ? "Staggered start: every group runs this same route. The slowest group leaves first and each group starts at its own time, so all groups finish together. "
                    + (idx ? "The route avoids streets with more violent incidents in the last 12 months (Philadelphia police data)." : (safetyGrid && safetyGrid.note) || "")
-      : sketched ? "" : `Routes keep to long straight streets with few turns${end ? "" : "; each group turns around at its numbered flag"}. `
+      : sketched ? "" : `Routes keep to long straight streets with few turns${end ? "" : ". Everyone heads out the same way; each group turns around at its numbered flag and comes back on the same streets"}. `
         + (idx ? "They also avoid streets with more violent incidents in the last 12 months (Philadelphia police data)."
                : (safetyGrid && safetyGrid.note) || "No street safety data here.")));
     return { layers, routes, staggered };
@@ -381,5 +439,5 @@ const FT_MAP = (() => {
     return { stop() { cancelAnimationFrame(raf); map.removeLayer(dots); } };
   }
 
-  return { makeMap, pin, drawPlan, replay, groupColor, hasLeaflet, dist, riskLabel };
+  return { makeMap, pin, drawPlan, replay, groupColor, hasLeaflet, dist, riskLabel, _test: { pickShape, route, turnsAlong } };
 })();
